@@ -1,15 +1,13 @@
 import os
 import sys
 
-path = 'drivers/kernelsu/pkg_observer.c'
-if not os.path.exists(path):
-    print(f'{path} not found!')
-    sys.exit(0)
+# 1. Patch drivers/kernelsu/pkg_observer.c
+pkg_path = 'drivers/kernelsu/pkg_observer.c'
+if os.path.exists(pkg_path):
+    with open(pkg_path, 'r', encoding='utf-8') as f:
+        code = f.read()
 
-with open(path, 'r', encoding='utf-8') as f:
-    code = f.read()
-
-target = """static const struct fsnotify_ops ksu_ops = {
+    target = """static const struct fsnotify_ops ksu_ops = {
 	.handle_inode_event = ksu_handle_inode_event,
 };
 
@@ -33,7 +31,7 @@ static int add_mark_on_inode(struct inode *inode, u32 mask,
 	return 0;
 }"""
 
-compat_code = """#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+    compat_code = """#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 static int ksu_handle_event(struct fsnotify_group *group,
 			    struct inode *to_tell,
 			    struct fsnotify_mark *inode_mark,
@@ -102,10 +100,60 @@ static int add_mark_on_inode(struct inode *inode, u32 mask,
 }
 #endif"""
 
-if target in code:
-    code = code.replace(target, compat_code)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(code)
-    print('pkg_observer.c successfully patched for Linux 4.14')
-else:
-    print('Warning: Target block not found in pkg_observer.c!')
+    if target in code:
+        code = code.replace(target, compat_code)
+        with open(pkg_path, 'w', encoding='utf-8') as f:
+            f.write(code)
+        print('pkg_observer.c successfully patched for Linux 4.14')
+    else:
+        print('Note: Target block not found or already patched in pkg_observer.c')
+
+# 2. Patch drivers/kernelsu/core_hook.c for SuSFS 4.14 compatibility
+hook_path = 'drivers/kernelsu/core_hook.c'
+if os.path.exists(hook_path):
+    with open(hook_path, 'r', encoding='utf-8') as f:
+        hook_code = f.read()
+
+    target_hook = '#include <linux/susfs.h>'
+    stubs = """#include <linux/susfs.h>
+
+struct st_susfs_sus_map;
+
+#ifndef CMD_SUSFS_ADD_SUS_PATH_LOOP
+#define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
+static inline int susfs_add_sus_path_loop(void *arg) { return -EOPNOTSUPP; }
+#endif
+#ifndef CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH
+#define CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH 0x55551
+#define CMD_SUSFS_SET_SDCARD_ROOT_PATH 0x55552
+static inline int susfs_set_i_state_on_external_dir(void *arg, int cmd) { return -EOPNOTSUPP; }
+#endif
+#ifndef CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS
+#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_ALL_PROCS 0x55561
+#endif
+#ifndef CMD_SUSFS_UMOUNT_FOR_ZYGOTE_ISO_SERVICE
+#define CMD_SUSFS_UMOUNT_FOR_ZYGOTE_ISO_SERVICE 0x55562
+#endif
+#ifndef CMD_SUSFS_ADD_SUS_MAP
+#define CMD_SUSFS_ADD_SUS_MAP 0x60020
+static inline int susfs_add_sus_map(void *arg) { return -EOPNOTSUPP; }
+#endif
+#ifndef CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING
+#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
+static inline void susfs_set_avc_log_spoofing(bool val) {}
+#endif
+
+static inline bool susfs_is_current_proc_umounted(void) { return false; }
+static inline void susfs_set_current_proc_umounted(void) {}
+__attribute__((weak)) bool susfs_hide_sus_mnts_for_all_procs = false;
+__attribute__((weak)) void susfs_reorder_mnt_id(void) {}
+__attribute__((weak)) void susfs_run_sus_path_loop(uid_t uid) {}
+__attribute__((weak)) int susfs_get_enabled_features(char __user *buf, size_t size) { return 0; }"""
+
+    if target_hook in hook_code and 'susfs_reorder_mnt_id(void) {}' not in hook_code:
+        hook_code = hook_code.replace(target_hook, stubs, 1)
+        with open(hook_path, 'w', encoding='utf-8') as f:
+            f.write(hook_code)
+        print('core_hook.c successfully patched for SuSFS 4.14 compatibility')
+    else:
+        print('Note: Target hook not found or already patched in core_hook.c')
