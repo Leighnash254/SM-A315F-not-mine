@@ -119,6 +119,9 @@ jobs:
             chmod +x /tmp/ksud
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
 
+            # Strip .git to avoid submodule conflict in actions post-cleanup
+            rm -rf $GITHUB_WORKSPACE/KernelSU-Next/.git
+
             # Link into drivers/kernelsu
             ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
@@ -130,6 +133,8 @@ jobs:
             curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
             chmod +x /tmp/ksud
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
+
+            rm -rf $GITHUB_WORKSPACE/KernelSU-Next/.git
 
             ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
@@ -184,6 +189,11 @@ jobs:
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
           fi
+
+          # Apply olddefconfig non-interactively to resolve any newly exposed options (e.g. NET_TCPPROBE)
+          make O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           echo "=== Verified Config Settings ==="
           grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX" out/.config || true
