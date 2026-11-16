@@ -157,3 +157,50 @@ __attribute__((weak)) int susfs_get_enabled_features(char __user *buf, size_t si
         print('core_hook.c successfully patched for SuSFS 4.14 compatibility')
     else:
         print('Note: Target hook not found or already patched in core_hook.c')
+
+# 3. Append can_umount and path_umount to fs/namespace.c (runs AFTER susfs 4.14 patch has applied cleanly)
+ns_path = 'fs/namespace.c'
+if os.path.exists(ns_path):
+    with open(ns_path, 'r', encoding='utf-8') as f:
+        ns_code = f.read()
+    if 'int path_umount' not in ns_code:
+        path_umount_impl = """
+/* KernelSU path_umount backport for Linux 4.14 */
+static int can_umount(const struct path *path, int flags)
+{
+	struct mount *mnt = real_mount(path->mnt);
+
+	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+		return -EINVAL;
+	if (!may_mount())
+		return -EPERM;
+	if (path->dentry != path->mnt->mnt_root)
+		return -EINVAL;
+	if (!check_mnt(mnt))
+		return -EINVAL;
+	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+		return -EINVAL;
+	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	return 0;
+}
+
+int path_umount(struct path *path, int flags)
+{
+	struct mount *mnt = real_mount(path->mnt);
+	int ret;
+
+	ret = can_umount(path, flags);
+	if (!ret)
+		ret = do_umount(mnt, flags);
+	dput(path->dentry);
+	mntput_no_expire(mnt);
+	return ret;
+}
+EXPORT_SYMBOL(path_umount);
+"""
+        with open(ns_path, 'a', encoding='utf-8') as f:
+            f.write(path_umount_impl)
+        print('fs/namespace.c successfully appended with can_umount & path_umount')
+    else:
+        print('Note: path_umount already present in fs/namespace.c')
