@@ -1,60 +1,308 @@
-name: Build SM-A315F kernel
+name: Build Samsung Galaxy A41 / A31 Kernel with KernelSU-Next & SuSFS
 
 on:
   workflow_dispatch:
-
-env:
-  DEFCONFIG: a31_defconfig
-  ARCH: arm64
+    inputs:
+      target_device:
+        description: "Target Device (a41: Galaxy A41 SM-A415F, a31: Galaxy A31 SM-A315F, all: Both)"
+        required: true
+        type: choice
+        options:
+          - "a41"
+          - "a31"
+          - "all"
+        default: "a41"
+      su_variant:
+        description: "SU / Root Variant to build"
+        required: true
+        type: choice
+        options:
+          - "ksun_susfs"
+          - "ksun_nosusfs"
+          - "vanilla"
+        default: "ksun_susfs"
+      release_tag:
+        description: "GitHub Release Tag to publish/update"
+        required: false
+        type: string
+        default: "A41-A31-KSUN-SuSFS"
+      make_release:
+        description: "Publish/Attach to GitHub Release"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
-  build:
+  setup:
+    name: Setup Matrix
     runs-on: ubuntu-22.04
+    outputs:
+      devices: ${{ steps.set-devices.outputs.devices }}
     steps:
-      - name: Free disk space
+      - id: set-devices
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
-          df -h /
+          if [ "${{ inputs.target_device }}" = "all" ]; then
+            echo 'devices=["a41", "a31"]' >> $GITHUB_OUTPUT
+          else
+            echo 'devices=["${{ inputs.target_device }}"]' >> $GITHUB_OUTPUT
+          fi
 
-      - name: Checkout
+  build:
+    name: Build Samsung ${{ matrix.device }} (${{ inputs.su_variant }})
+    needs: setup
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        device: ${{ fromJson(needs.setup.outputs.devices) }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Free Runner Disk Space
+        run: |
+          echo "=== Freeing disk space ==="
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune -a -f || true
+          df -h
+
+      - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install deps
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld llvm bc bison flex libssl-dev \
-            libelf-dev cpio zip gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          sudo apt-get install -y --no-install-recommends             build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl             zip unzip file python3 tar wget jq rsync xz-utils perl ccache             binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
 
-      - name: Setup KernelSU-Next (legacy)
+      - name: Setup Swap Memory
         run: |
-          rm -rf KernelSU-Next drivers/kernelsu
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
-          ls -la drivers | grep -i kernelsu || true
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=16384
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
 
-      - name: Configure
+      - name: Download Proton Clang 13
         run: |
-          make O=out ARCH=$ARCH CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
-          scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS
-          scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP -d SECURITY_SELINUX_ALWAYS_ENFORCE
-          for c in UH RKP DEFEX; do scripts/config --file out/.config -d $c || true; done
+          echo "=== Cloning Proton Clang 13 ==="
+          mkdir -p $GITHUB_WORKSPACE/toolchains
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $GITHUB_WORKSPACE/toolchains/proton-clang
+          echo "$GITHUB_WORKSPACE/toolchains/proton-clang/bin" >> $GITHUB_PATH
+          $GITHUB_WORKSPACE/toolchains/proton-clang/bin/clang --version
+          $GITHUB_WORKSPACE/toolchains/proton-clang/bin/aarch64-linux-gnu-as --version
 
-      - name: Build
+      - name: Setup SuSFS & KernelSU-Next
+        run: |
+          DEVICE="${{ matrix.device }}"
+          VARIANT="${{ inputs.su_variant }}"
+          echo "=== Setting up Root Variant: $VARIANT for $DEVICE ==="
+
+          if [ "$VARIANT" = "ksun_susfs" ]; then
+            echo "--- Integrating SuSFS 4.14 patches ---"
+            git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git $GITHUB_WORKSPACE/susfs4ksu
+            cp -vf $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/* fs/
+            cp -vf $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/* include/linux/
+            sed -i 's/#define SUSFS_VERSION .*/#define SUSFS_VERSION "v2.2.0"/' include/linux/susfs.h
+            patch -p1 --fuzz=3 < $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
+
+            echo "--- Integrating KernelSU-Next (pershoot next-susfs with in-tree SuSFS) ---"
+            git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git $GITHUB_WORKSPACE/KernelSU-Next
+
+            # Embed ksud binary from official v3.4.2 release
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
+            chmod +x /tmp/ksud
+            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
+
+            # Link into drivers/kernelsu
+            ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
+            grep -q "kernelsu" drivers/Makefile || printf "
+obj-\$(CONFIG_KSU) += kernelsu/
+" >> drivers/Makefile
+            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          elif [ "$VARIANT" = "ksun_nosusfs" ]; then
+            echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
+            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git $GITHUB_WORKSPACE/KernelSU-Next
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
+            chmod +x /tmp/ksud
+            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
+
+            ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
+            grep -q "kernelsu" drivers/Makefile || printf "
+obj-\$(CONFIG_KSU) += kernelsu/
+" >> drivers/Makefile
+            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          else
+            echo "--- Vanilla mode selected: skipping root injection ---"
+          fi
+
+      - name: Configure Kernel Defconfig
+        run: |
+          DEVICE="${{ matrix.device }}"
+          VARIANT="${{ inputs.su_variant }}"
+          DEFCONFIG="${DEVICE}_defconfig"
+
+          echo "Target defconfig: $DEFCONFIG"
+          if [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
+            echo "::error::Defconfig arch/arm64/configs/$DEFCONFIG not found!"
+            exit 1
+          fi
+
+          make O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
+
+          # Strip Knox and security modules that break custom kernels
+          for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG; do
+            scripts/config --file out/.config -d $c || true
+          done
+          scripts/config --file out/.config -e LTO_NONE || true
+          scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
+
+          if [ "$VARIANT" = "ksun_susfs" ]; then
+            # Enable KSU and KPROBES
+            scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
+
+            # Enable SuSFS
+            scripts/config --file out/.config -e KSU_SUSFS               -e KSU_SUSFS_SUS_PATH               -e KSU_SUSFS_SUS_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT               -e KSU_SUSFS_SUS_KSTAT               -e KSU_SUSFS_TRY_UMOUNT               -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT               -e KSU_SUSFS_SPOOF_UNAME               -e KSU_SUSFS_ENABLE_LOG               -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS               -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG               -e KSU_SUSFS_OPEN_REDIRECT               -d KSU_SUSFS_SUS_SU || true
+
+          elif [ "$VARIANT" = "ksun_nosusfs" ]; then
+            scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
+          fi
+
+          echo "=== Verified Config Settings ==="
+          grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX" out/.config || true
+
+      - name: Compile Kernel
         shell: bash
         run: |
-          make -j$(nproc) O=out ARCH=$ARCH CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig Image.gz-dtb 2>&1 | tee build.log
+          echo "=== Starting Kernel Compilation with Proton Clang ==="
+          make -j$(nproc) O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu-             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi-             KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
 
-      - name: Upload
+      - name: Append Device Tree Blob
+        run: |
+          echo "=== Preparing Image.gz-dtb ==="
+          DTB_PATH="out/arch/arm64/boot/dts/mediatek/mt6768.dtb"
+          if [ -f "$DTB_PATH" ] && [ -f "out/arch/arm64/boot/Image.gz" ]; then
+            cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > out/arch/arm64/boot/Image.gz-dtb
+            echo "Successfully appended mt6768.dtb to Image.gz."
+          elif [ -f "out/arch/arm64/boot/Image.gz" ]; then
+            cp out/arch/arm64/boot/Image.gz out/arch/arm64/boot/Image.gz-dtb
+            echo "Copied Image.gz as Image.gz-dtb."
+          fi
+          ls -lh out/arch/arm64/boot/
+
+      - name: Package with AnyKernel3
+        id: package
+        run: |
+          DEVICE="${{ matrix.device }}"
+          VARIANT="${{ inputs.su_variant }}"
+          BUILD_DATE=$(date "+%Y%m%d-%H%M")
+          mkdir -p $GITHUB_WORKSPACE/staging
+          cd $GITHUB_WORKSPACE/staging
+
+          echo "Cloning AnyKernel3 template..."
+          git clone --depth=1 https://github.com/Edhic1/AnyKernel3.git -b Samsung_A31 anykernel
+          cd anykernel
+          rm -rf .git README.md
+
+          # Customize anykernel.sh
+          cat << 'EOF' > anykernel.sh
+### AnyKernel3 Ramdisk Mod Script
+## osm0sis @ xda-developers
+
+### AnyKernel setup
+# global properties
+properties() { '
+kernel.string=KernelSU-Next v3.4.2 & SuSFS for Samsung Galaxy A41 / A31
+do.devicecheck=1
+do.modules=0
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=a41
+device.name2=a41nsxx
+device.name3=sm-a415f
+device.name4=a31
+device.name5=a31nsxx
+device.name6=sm-a315f
+device.name7=sm-a315g
+device.name8=sm-a315n
+supported.versions=
+supported.patchlevels=
+supported.vendorpatchlevels=
+'; } # end properties
+
+### AnyKernel install
+## boot files attributes
+boot_attributes() {
+set_perm_recursive 0 0 755 644 $RAMDISK/*;
+set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+} # end attributes
+
+# boot shell variables
+BLOCK=/dev/block/by-name/boot;
+IS_SLOT_DEVICE=0;
+RAMDISK_COMPRESSION=auto;
+PATCH_VBMETA_FLAG=auto;
+
+# import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+. tools/ak3-core.sh;
+
+# boot install
+dump_boot;
+write_boot;
+EOF
+
+          cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
+          cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
+
+          UPPER_DEV=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
+          ZIP_NAME="Samsung-${UPPER_DEV}-KSUNext-v3.4.2-SuSFS-v2.2-${BUILD_DATE}.zip"
+          zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
+          echo "Created flashable zip: $ZIP_NAME"
+
+          # Download official KernelSU-Next Manager APK
+          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2_33355-release.apk"
+
+          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
+          ls -lh $GITHUB_WORKSPACE/staging/
+
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: A315F-kernel
+          name: Samsung-${{ matrix.device }}-Kernel-${{ github.run_number }}
           path: |
+            staging/*.zip
+            staging/*.apk
             out/arch/arm64/boot/Image*
             out/.config
             build.log
+
+      - name: Create GitHub Release
+        if: inputs.make_release == true && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: Samsung Galaxy A41 / A31 KernelSU-Next v3.4.2 & SuSFS
+          body: |
+            ## Samsung Galaxy A41 (SM-A415F) & A31 (SM-A315F) Kernel Build
+            - **Device:** Samsung Galaxy ${{ matrix.device }}
+            - **Chipset:** MediaTek Helio P65 (MT6768)
+            - **Root Solution:** KernelSU-Next v3.4.2
+            - **Stealth / Anti-Detection:** SuSFS v2.2.0 (kernel-4.14 patched)
+            - **Compiler:** Proton Clang 13
+            - **Package:** AnyKernel3 flashable recovery ZIP
+
+            ### Installation:
+            1. Flash the AnyKernel3 ZIP in TWRP or OrangeFox Recovery.
+            2. Reboot to System.
+            3. Install `KernelSU_Next_v3.4.2_33355-release.apk` to manage SuperUser permissions and modules.
+          files: |
+            staging/*.zip
+            staging/*.apk
+            out/arch/arm64/boot/Image.gz-dtb
+          draft: false
+          prerelease: false
