@@ -74,7 +74,10 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl             zip unzip file python3 tar wget jq rsync xz-utils perl ccache             binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl \
+            zip unzip file python3 tar wget jq rsync xz-utils perl ccache \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
 
       - name: Setup Swap Memory
         run: |
@@ -118,9 +121,7 @@ jobs:
 
             # Link into drivers/kernelsu
             ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
-            grep -q "kernelsu" drivers/Makefile || printf "
-obj-\$(CONFIG_KSU) += kernelsu/
-" >> drivers/Makefile
+            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
@@ -131,9 +132,7 @@ obj-\$(CONFIG_KSU) += kernelsu/
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
 
             ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
-            grep -q "kernelsu" drivers/Makefile || printf "
-obj-\$(CONFIG_KSU) += kernelsu/
-" >> drivers/Makefile
+            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           else
             echo "--- Vanilla mode selected: skipping root injection ---"
@@ -151,7 +150,9 @@ obj-\$(CONFIG_KSU) += kernelsu/
             exit 1
           fi
 
-          make O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
+          make O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
 
           # Strip Knox and security modules that break custom kernels
           for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG; do
@@ -165,7 +166,20 @@ obj-\$(CONFIG_KSU) += kernelsu/
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
 
             # Enable SuSFS
-            scripts/config --file out/.config -e KSU_SUSFS               -e KSU_SUSFS_SUS_PATH               -e KSU_SUSFS_SUS_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT               -e KSU_SUSFS_SUS_KSTAT               -e KSU_SUSFS_TRY_UMOUNT               -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT               -e KSU_SUSFS_SPOOF_UNAME               -e KSU_SUSFS_ENABLE_LOG               -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS               -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG               -e KSU_SUSFS_OPEN_REDIRECT               -d KSU_SUSFS_SUS_SU || true
+            scripts/config --file out/.config -e KSU_SUSFS \
+              -e KSU_SUSFS_SUS_PATH \
+              -e KSU_SUSFS_SUS_MOUNT \
+              -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+              -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+              -e KSU_SUSFS_SUS_KSTAT \
+              -e KSU_SUSFS_TRY_UMOUNT \
+              -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+              -e KSU_SUSFS_SPOOF_UNAME \
+              -e KSU_SUSFS_ENABLE_LOG \
+              -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+              -e KSU_SUSFS_OPEN_REDIRECT \
+              -d KSU_SUSFS_SUS_SU || true
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
@@ -178,7 +192,11 @@ obj-\$(CONFIG_KSU) += kernelsu/
         shell: bash
         run: |
           echo "=== Starting Kernel Compilation with Proton Clang ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu-             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi-             KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
+          make -j$(nproc) O=out ARCH=arm64 CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
 
       - name: Append Device Tree Blob
         run: |
