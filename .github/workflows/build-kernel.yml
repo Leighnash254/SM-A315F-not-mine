@@ -4,42 +4,42 @@ on:
   workflow_dispatch:
     inputs:
       target_device:
-        description: "Target Device (a41: Galaxy A41 SM-A415F, a31: Galaxy A31 SM-A315F, all: Both)"
+        description: 'Target Device to Build'
         required: true
         type: choice
+        default: 'a41'
         options:
-          - "a41"
-          - "a31"
-          - "all"
-        default: "a41"
+          - 'a41'
+          - 'a31'
+          - 'all'
       su_variant:
-        description: "SU / Root Variant to build"
+        description: 'Root & SuSFS Variant'
         required: true
         type: choice
+        default: 'ksun_susfs'
         options:
-          - "ksun_susfs"
-          - "ksun_nosusfs"
-          - "vanilla"
-        default: "ksun_susfs"
-      release_tag:
-        description: "GitHub Release Tag to publish/update"
-        required: false
-        type: string
-        default: "A41-A31-KSUN-SuSFS"
+          - 'ksun_susfs'
+          - 'ksun_nosusfs'
+          - 'vanilla'
       make_release:
-        description: "Publish/Attach to GitHub Release"
+        description: 'Create GitHub Release on Success'
         required: false
         type: boolean
         default: true
+      release_tag:
+        description: 'Release Tag'
+        required: false
+        type: string
+        default: 'A41-A31-KSUN-SuSFS'
 
 jobs:
-  setup:
+  matrix_prep:
     name: Setup Matrix
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     outputs:
-      devices: ${{ steps.set-devices.outputs.devices }}
+      devices: ${{ steps.set-matrix.outputs.devices }}
     steps:
-      - id: set-devices
+      - id: set-matrix
         run: |
           if [ "${{ inputs.target_device }}" = "all" ]; then
             echo 'devices=["a41", "a31"]' >> $GITHUB_OUTPUT
@@ -49,14 +49,12 @@ jobs:
 
   build:
     name: Build Samsung ${{ matrix.device }} (${{ inputs.su_variant }})
-    needs: setup
+    needs: matrix_prep
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        device: ${{ fromJson(needs.setup.outputs.devices) }}
-    permissions:
-      contents: write
+        device: ${{ fromJson(needs.matrix_prep.outputs.devices) }}
 
     steps:
       - name: Free Runner Disk Space
@@ -91,11 +89,11 @@ jobs:
       - name: Download Proton Clang 13
         run: |
           echo "=== Cloning Proton Clang 13 ==="
-          mkdir -p $GITHUB_WORKSPACE/toolchains
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $GITHUB_WORKSPACE/toolchains/proton-clang
-          echo "$GITHUB_WORKSPACE/toolchains/proton-clang/bin" >> $GITHUB_PATH
-          $GITHUB_WORKSPACE/toolchains/proton-clang/bin/clang --version
-          $GITHUB_WORKSPACE/toolchains/proton-clang/bin/aarch64-linux-gnu-as --version
+          mkdir -p $HOME/toolchains
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $HOME/toolchains/proton-clang
+          echo "$HOME/toolchains/proton-clang/bin" >> $GITHUB_PATH
+          $HOME/toolchains/proton-clang/bin/clang --version
+          $HOME/toolchains/proton-clang/bin/aarch64-linux-gnu-as --version
 
       - name: Setup SuSFS & KernelSU-Next
         run: |
@@ -105,38 +103,35 @@ jobs:
 
           if [ "$VARIANT" = "ksun_susfs" ]; then
             echo "--- Integrating SuSFS 4.14 patches ---"
-            git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git $GITHUB_WORKSPACE/susfs4ksu
-            cp -vf $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/* fs/
-            cp -vf $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/* include/linux/
+            git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+            cp -vf /tmp/susfs4ksu/kernel_patches/fs/* fs/
+            cp -vf /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
             sed -i 's/#define SUSFS_VERSION .*/#define SUSFS_VERSION "v2.2.0"/' include/linux/susfs.h
-            patch -p1 --fuzz=3 < $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
+            patch -p1 --fuzz=3 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
 
             echo "--- Integrating KernelSU-Next (pershoot next-susfs with in-tree SuSFS) ---"
-            git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git $GITHUB_WORKSPACE/KernelSU-Next
+            git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git /tmp/KernelSU-Next
 
             # Embed ksud binary from official v3.4.2 release
             curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
             chmod +x /tmp/ksud
-            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
+            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
-            # Strip .git to avoid submodule conflict in actions post-cleanup
-            rm -rf $GITHUB_WORKSPACE/KernelSU-Next/.git
-
-            # Link into drivers/kernelsu
-            ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
+            # Copy tree to drivers/kernelsu (avoids any submodule issues)
+            rm -rf drivers/kernelsu
+            cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
-            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git $GITHUB_WORKSPACE/KernelSU-Next
+            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
             curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
             chmod +x /tmp/ksud
-            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > $GITHUB_WORKSPACE/KernelSU-Next/kernel/embed_ksud.c
+            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
-            rm -rf $GITHUB_WORKSPACE/KernelSU-Next/.git
-
-            ln -sf "$GITHUB_WORKSPACE/KernelSU-Next/kernel" "drivers/kernelsu"
+            rm -rf drivers/kernelsu
+            cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           else
@@ -160,10 +155,11 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
 
           # Strip Knox and security modules that break custom kernels
-          for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG; do
+          for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG; do
             scripts/config --file out/.config -d $c || true
           done
           scripts/config --file out/.config -e LTO_NONE || true
+          scripts/config --file out/.config -e CC_STACKPROTECTOR_NONE || true
           scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
 
           if [ "$VARIANT" = "ksun_susfs" ]; then
@@ -196,7 +192,7 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           echo "=== Verified Config Settings ==="
-          grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX" out/.config || true
+          grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX|CONFIG_CC_STACKPROTECTOR" out/.config || true
 
       - name: Compile Kernel
         shell: bash
@@ -207,6 +203,11 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
+
+          if [ ! -f "out/arch/arm64/boot/Image.gz" ]; then
+            echo "::error::Image.gz build failed!"
+            exit 1
+          fi
 
       - name: Append Device Tree Blob
         run: |
@@ -264,6 +265,7 @@ jobs:
             out/arch/arm64/boot/Image*
             out/.config
             build.log
+          include-hidden-files: true
 
       - name: Create GitHub Release
         if: inputs.make_release == true && success()
@@ -288,5 +290,3 @@ jobs:
             staging/*.zip
             staging/*.apk
             out/arch/arm64/boot/Image.gz-dtb
-          draft: false
-          prerelease: false
