@@ -117,11 +117,14 @@ jobs:
             chmod +x /tmp/ksud
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
-            # Copy tree to drivers/kernelsu (avoids any submodule issues)
+            # Copy tree to drivers/kernelsu
             rm -rf drivers/kernelsu
             cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+            # Patch pkg_observer.c for Linux 4.14 fsnotify API
+            python3 scripts/patch_ksu_414.py
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
@@ -134,6 +137,7 @@ jobs:
             cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+            python3 scripts/patch_ksu_414.py
           else
             echo "--- Vanilla mode selected: skipping root injection ---"
           fi
