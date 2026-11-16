@@ -25,8 +25,11 @@ struct seccomp_filter;
  *          @filter must only be accessed from the context of current as there
  *          is no read locking.
  */
+#include <linux/atomic.h>
+
 struct seccomp {
 	int mode;
+	atomic_t filter_count;
 	struct seccomp_filter *filter;
 };
 
