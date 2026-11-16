@@ -225,53 +225,9 @@ jobs:
           cd anykernel
           rm -rf .git README.md
 
-          # Customize anykernel.sh
-          cat << 'EOF' > anykernel.sh
-### AnyKernel3 Ramdisk Mod Script
-## osm0sis @ xda-developers
-
-### AnyKernel setup
-# global properties
-properties() { '
-kernel.string=KernelSU-Next v3.4.2 & SuSFS for Samsung Galaxy A41 / A31
-do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=a41
-device.name2=a41nsxx
-device.name3=sm-a415f
-device.name4=a31
-device.name5=a31nsxx
-device.name6=sm-a315f
-device.name7=sm-a315g
-device.name8=sm-a315n
-supported.versions=
-supported.patchlevels=
-supported.vendorpatchlevels=
-'; } # end properties
-
-### AnyKernel install
-## boot files attributes
-boot_attributes() {
-set_perm_recursive 0 0 755 644 $RAMDISK/*;
-set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
-} # end attributes
-
-# boot shell variables
-BLOCK=/dev/block/by-name/boot;
-IS_SLOT_DEVICE=0;
-RAMDISK_COMPRESSION=auto;
-PATCH_VBMETA_FLAG=auto;
-
-# import functions/variables and setup patching - see for reference (DO NOT REMOVE)
-. tools/ak3-core.sh;
-
-# boot install
-dump_boot;
-write_boot;
-EOF
+          # Customize anykernel.sh for A41 and A31
+          sed -i 's/kernel.string=.*/kernel.string=KernelSU-Next v3.4.2 \& SuSFS for Samsung A41\/A31/' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=a41\ndevice.name2=a41nsxx\ndevice.name3=sm-a415f\ndevice.name4=a31\ndevice.name5=a31nsxx\ndevice.name6=sm-a315f/' anykernel.sh
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
