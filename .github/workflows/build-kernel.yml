@@ -30,7 +30,10 @@ on:
         description: 'Release Tag'
         required: false
         type: string
-        default: 'A41-A31-KSUN-SuSFS'
+        default: 'A41-A31-KSUN-SuSFS-v2.2'
+
+permissions:
+  contents: write
 
 jobs:
   matrix_prep:
@@ -51,6 +54,8 @@ jobs:
     name: Build Samsung ${{ matrix.device }} (${{ inputs.su_variant }})
     needs: matrix_prep
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -72,10 +77,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl \
-            zip unzip file python3 tar wget jq rsync xz-utils perl ccache \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
+          sudo apt-get install -y --no-install-recommends             build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl             zip unzip file python3 tar wget jq rsync xz-utils perl ccache             binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
 
       - name: Setup Swap Memory
         run: |
@@ -154,9 +156,7 @@ jobs:
             exit 1
           fi
 
-          make O=out ARCH=arm64 CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
+          make O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
 
           # Strip Knox and security modules that break custom kernels
           for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG; do
@@ -171,29 +171,14 @@ jobs:
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
 
             # Enable SuSFS
-            scripts/config --file out/.config -e KSU_SUSFS \
-              -e KSU_SUSFS_SUS_PATH \
-              -e KSU_SUSFS_SUS_MOUNT \
-              -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-              -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-              -e KSU_SUSFS_SUS_KSTAT \
-              -e KSU_SUSFS_TRY_UMOUNT \
-              -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
-              -e KSU_SUSFS_SPOOF_UNAME \
-              -e KSU_SUSFS_ENABLE_LOG \
-              -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-              -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-              -e KSU_SUSFS_OPEN_REDIRECT \
-              -d KSU_SUSFS_SUS_SU || true
+            scripts/config --file out/.config -e KSU_SUSFS               -e KSU_SUSFS_SUS_PATH               -e KSU_SUSFS_SUS_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT               -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT               -e KSU_SUSFS_SUS_KSTAT               -e KSU_SUSFS_TRY_UMOUNT               -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT               -e KSU_SUSFS_SPOOF_UNAME               -e KSU_SUSFS_ENABLE_LOG               -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS               -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG               -e KSU_SUSFS_OPEN_REDIRECT               -d KSU_SUSFS_SUS_SU || true
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
           fi
 
           # Apply olddefconfig non-interactively to resolve any newly exposed options (e.g. NET_TCPPROBE)
-          make O=out ARCH=arm64 CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
+          make O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           echo "=== Verified Config Settings ==="
           grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX|CONFIG_CC_STACKPROTECTOR" out/.config || true
@@ -202,11 +187,7 @@ jobs:
         shell: bash
         run: |
           echo "=== Starting Kernel Compilation with Proton Clang ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
+          make -j$(nproc) O=out ARCH=arm64 CC=clang             CLANG_TRIPLE=aarch64-linux-gnu-             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_ARM32=arm-linux-gnueabi-             KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
 
           if [ ! -f "out/arch/arm64/boot/Image.gz" ]; then
             echo "::error::Image.gz build failed!"
@@ -244,7 +225,15 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
           sed -i 's/kernel.string=.*/kernel.string=KernelSU-Next \& SuSFS v2.2.0 for Samsung A41\/A31/' anykernel.sh
-          sed -i 's/device.name1=.*/device.name1=a41\ndevice.name2=a41nsxx\ndevice.name3=sm-a415f\ndevice.name4=sm-a415n\ndevice.name5=a31\ndevice.name6=a31nsxx\ndevice.name7=sm-a315f\ndevice.name8=sm-a315g\ndevice.name9=sm-a315n/' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=a41
+device.name2=a41nsxx
+device.name3=sm-a415f
+device.name4=sm-a415n
+device.name5=a31
+device.name6=a31nsxx
+device.name7=sm-a315f
+device.name8=sm-a315g
+device.name9=sm-a315n/' anykernel.sh
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
@@ -281,15 +270,37 @@ jobs:
             build.log
           include-hidden-files: true
 
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: inputs.make_release == true && success()
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all_artifacts
+          merge-multiple: true
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release_assets
+          cp -v all_artifacts/*.zip release_assets/ || true
+          cp -v all_artifacts/*.apk release_assets/ || true
+          cd release_assets
+          sha256sum *.zip *.apk > sha256sums.txt
+          ls -lh
+
       - name: Create GitHub Release
-        if: inputs.make_release == true && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
           name: Samsung Galaxy A41 / A31 KernelSU-Next & SuSFS v2.2.0
           body: |
             ## Samsung Galaxy A41 (SM-A415F) & A31 (SM-A315F) Kernel Build
-            - **Device:** Samsung Galaxy ${{ matrix.device }}
+            - **Devices:** Samsung Galaxy A41 & Samsung Galaxy A31
             - **Chipset:** MediaTek Helio P65 (MT6768)
             - **Root Solution:** KernelSU-Next (Legacy v1.1.1 / Next v3.4.2 ksud embedded)
             - **Stealth / Anti-Detection:** SuSFS v2.2.0 (kernel-4.14 patched)
@@ -300,8 +311,4 @@ jobs:
             1. Flash the AnyKernel3 ZIP in TWRP or OrangeFox Recovery.
             2. Reboot to System.
             3. Install matching Manager APK (`KernelSU_Next_v1.1.1` or `KernelSU_Next_v3.4.2`).
-          files: |
-            staging/*.zip
-            staging/*.apk
-            staging/sha256sums.txt
-            out/arch/arm64/boot/Image.gz-dtb
+          files: release_assets/*
