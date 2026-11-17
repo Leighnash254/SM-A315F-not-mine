@@ -1,7 +1,10 @@
 import os
 import sys
 
-# 1. Patch drivers/kernelsu/pkg_observer.c
+def log(msg):
+    print(f"[+] {msg}", flush=True)
+
+# 1. Patch drivers/kernelsu/pkg_observer.c for Linux 4.14 fsnotify API
 pkg_path = 'drivers/kernelsu/pkg_observer.c'
 if os.path.exists(pkg_path):
     with open(pkg_path, 'r', encoding='utf-8') as f:
@@ -104,11 +107,11 @@ static int add_mark_on_inode(struct inode *inode, u32 mask,
         code = code.replace(target, compat_code)
         with open(pkg_path, 'w', encoding='utf-8') as f:
             f.write(code)
-        print('pkg_observer.c successfully patched for Linux 4.14')
+        log('pkg_observer.c successfully patched for Linux 4.14')
     else:
-        print('Note: Target block not found or already patched in pkg_observer.c')
+        log('Note: Target block not found or already patched in pkg_observer.c')
 
-# 2. Patch drivers/kernelsu/core_hook.c for SuSFS 4.14 compatibility
+# 2. Patch drivers/kernelsu/core_hook.c for SuSFS 4.14 compatibility and ksu_try_umount
 hook_path = 'drivers/kernelsu/core_hook.c'
 if os.path.exists(hook_path):
     with open(hook_path, 'r', encoding='utf-8') as f:
@@ -152,13 +155,49 @@ __attribute__((weak)) int susfs_get_enabled_features(char __user *buf, size_t si
 
     if target_hook in hook_code and 'susfs_reorder_mnt_id(void) {}' not in hook_code:
         hook_code = hook_code.replace(target_hook, stubs, 1)
-        with open(hook_path, 'w', encoding='utf-8') as f:
-            f.write(hook_code)
-        print('core_hook.c successfully patched for SuSFS 4.14 compatibility')
-    else:
-        print('Note: Target hook not found or already patched in core_hook.c')
 
-# 3. Append can_umount and path_umount to fs/namespace.c (runs AFTER susfs 4.14 patch has applied cleanly)
+    # Add ksu_try_umount bridge for susfs.c
+    if 'void ksu_try_umount' not in hook_code:
+        ksu_try_umount_impl = """
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+void ksu_try_umount(const char *mnt, bool check_mnt, int flags, uid_t uid)
+{
+	try_umount(mnt, check_mnt, flags, uid);
+}
+#endif
+"""
+        hook_code += ksu_try_umount_impl
+        log('Added ksu_try_umount implementation to drivers/kernelsu/core_hook.c')
+
+    with open(hook_path, 'w', encoding='utf-8') as f:
+        f.write(hook_code)
+    log('core_hook.c successfully patched')
+
+# 3. Patch fs/notify/fdinfo.c for missing inotify_mark_user_mask in Linux 4.14
+fdinfo_path = 'fs/notify/fdinfo.c'
+if os.path.exists(fdinfo_path):
+    with open(fdinfo_path, 'r', encoding='utf-8') as f:
+        fdinfo_code = f.read()
+
+    if 'static inline u32 inotify_mark_user_mask' not in fdinfo_code:
+        inotify_helper = """
+#ifndef inotify_mark_user_mask
+static inline u32 inotify_mark_user_mask(struct fsnotify_mark *mark)
+{
+	return mark->mask & IN_ALL_EVENTS;
+}
+#endif
+"""
+        target_inc = '#include "inotify/inotify.h"'
+        if target_inc in fdinfo_code:
+            fdinfo_code = fdinfo_code.replace(target_inc, target_inc + "\n" + inotify_helper, 1)
+        else:
+            fdinfo_code = inotify_helper + "\n" + fdinfo_code
+        with open(fdinfo_path, 'w', encoding='utf-8') as f:
+            f.write(fdinfo_code)
+        log('fs/notify/fdinfo.c successfully patched with inotify_mark_user_mask')
+
+# 4. Patch fs/namespace.c (ensure can_umount and path_umount exist)
 ns_path = 'fs/namespace.c'
 if os.path.exists(ns_path):
     with open(ns_path, 'r', encoding='utf-8') as f:
@@ -201,6 +240,93 @@ EXPORT_SYMBOL(path_umount);
 """
         with open(ns_path, 'a', encoding='utf-8') as f:
             f.write(path_umount_impl)
-        print('fs/namespace.c successfully appended with can_umount & path_umount')
-    else:
-        print('Note: path_umount already present in fs/namespace.c')
+        log('fs/namespace.c successfully appended with can_umount & path_umount')
+
+# 5. Patch include/linux/idr.h
+idr_path = 'include/linux/idr.h'
+if os.path.exists(idr_path):
+    with open(idr_path, 'r', encoding='utf-8') as f:
+        idr_code = f.read()
+    if 'ida_alloc' not in idr_code:
+        target = "void ida_simple_remove(struct ida *ida, unsigned int id);"
+        helpers = """
+static inline int ida_alloc_range(struct ida *ida, unsigned int min, unsigned int max, gfp_t gfp)
+{
+	return ida_simple_get(ida, min, max, gfp);
+}
+static inline int ida_alloc_min(struct ida *ida, unsigned int min, gfp_t gfp)
+{
+	return ida_simple_get(ida, min, 0, gfp);
+}
+static inline int ida_alloc(struct ida *ida, gfp_t gfp)
+{
+	return ida_simple_get(ida, 0, 0, gfp);
+}
+static inline void ida_free(struct ida *ida, unsigned int id)
+{
+	ida_simple_remove(ida, id);
+}
+"""
+        if target in idr_code:
+            idr_code = idr_code.replace(target, target + "\n" + helpers, 1)
+            with open(idr_path, 'w', encoding='utf-8') as f:
+                f.write(idr_code)
+            log('Injected ida_alloc helpers into include/linux/idr.h')
+
+# 6. Patch include/linux/poll.h
+poll_path = 'include/linux/poll.h'
+if os.path.exists(poll_path):
+    with open(poll_path, 'r', encoding='utf-8') as f:
+        poll_code = f.read()
+    if '__poll_t' not in poll_code:
+        target = "#include <uapi/linux/poll.h>"
+        helpers = """#include <uapi/linux/poll.h>
+
+#ifndef __poll_t
+#define __poll_t __poll_t
+typedef unsigned int __poll_t;
+#endif
+"""
+        if target in poll_code:
+            poll_code = poll_code.replace(target, helpers, 1)
+            with open(poll_path, 'w', encoding='utf-8') as f:
+                f.write(poll_code)
+            log('Injected __poll_t typedef into include/linux/poll.h')
+
+# 7. Patch include/linux/timekeeping.h
+tk_path = 'include/linux/timekeeping.h'
+if os.path.exists(tk_path):
+    with open(tk_path, 'r', encoding='utf-8') as f:
+        tk_code = f.read()
+    if 'ktime_get_boottime_ts64' not in tk_code:
+        target = "static inline void get_monotonic_boottime64(struct timespec64 *ts)"
+        helper = """static inline void ktime_get_boottime_ts64(struct timespec64 *ts)
+{
+	*ts = ktime_to_timespec64(ktime_get_boottime());
+}
+
+static inline void get_monotonic_boottime64(struct timespec64 *ts)"""
+        if target in tk_code:
+            tk_code = tk_code.replace(target, helper, 1)
+            with open(tk_path, 'w', encoding='utf-8') as f:
+                f.write(tk_code)
+            log('Injected ktime_get_boottime_ts64 into include/linux/timekeeping.h')
+
+# 8. Patch drivers/kernelsu/kernel_compat.h
+compat_h = 'drivers/kernelsu/kernel_compat.h'
+if os.path.exists(compat_h):
+    with open(compat_h, 'r', encoding='utf-8') as f:
+        c = f.read()
+    if 'KSYM_NAME_LEN' not in c:
+        extra = """
+#include <linux/kallsyms.h>
+#ifndef KSYM_NAME_LEN
+#define KSYM_NAME_LEN 128
+#endif
+"""
+        target = "#define __KSU_H_KERNEL_COMPAT"
+        if target in c:
+            c = c.replace(target, target + extra, 1)
+            with open(compat_h, 'w', encoding='utf-8') as f:
+                f.write(c)
+            log('Added KSYM_NAME_LEN fallback to kernel_compat.h')
