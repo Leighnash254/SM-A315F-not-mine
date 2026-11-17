@@ -300,10 +300,8 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp -v all_artifacts/*.zip release_assets/ || true
-          cp -v all_artifacts/*.apk release_assets/ || true
+          find all_artifacts -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.txt" \) -exec cp -v {} release_assets/ \;
           cd release_assets
-          sha256sum *.zip *.apk > sha256sums.txt
           ls -lh
 
       - name: Create GitHub Release
