@@ -123,7 +123,7 @@ jobs:
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-            # Patch pkg_observer.c for Linux 4.14 fsnotify API
+            # Patch pkg_observer.c, core_hook.c, fdinfo.c for Linux 4.14
             python3 scripts/patch_ksu_414.py
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
@@ -240,20 +240,29 @@ jobs:
           cd anykernel
           rm -rf .git README.md
 
-          # Customize anykernel.sh for A41 and A31
-          sed -i 's/kernel.string=.*/kernel.string=KernelSU-Next v3.4.2 \& SuSFS for Samsung A41\/A31/' anykernel.sh
-          sed -i 's/device.name1=.*/device.name1=a41\ndevice.name2=a41nsxx\ndevice.name3=sm-a415f\ndevice.name4=a31\ndevice.name5=a31nsxx\ndevice.name6=sm-a315f/' anykernel.sh
+          # Fix AnyKernel3 device check and dynamic block detection (resolve mount bug)
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
+          sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=KernelSU-Next \& SuSFS v2.2.0 for Samsung A41\/A31/' anykernel.sh
+          sed -i 's/device.name1=.*/device.name1=a41\ndevice.name2=a41nsxx\ndevice.name3=sm-a415f\ndevice.name4=sm-a415n\ndevice.name5=a31\ndevice.name6=a31nsxx\ndevice.name7=sm-a315f\ndevice.name8=sm-a315g\ndevice.name9=sm-a315n/' anykernel.sh
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
           UPPER_DEV=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
-          ZIP_NAME="Samsung-${UPPER_DEV}-KSUNext-v3.4.2-SuSFS-v2.2-${BUILD_DATE}.zip"
+          ZIP_NAME="Samsung-${UPPER_DEV}-KSUNext-SuSFS-v2.2-${BUILD_DATE}.zip"
           zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
           echo "Created flashable zip: $ZIP_NAME"
 
-          # Download official KernelSU-Next Manager APK
+          cd $GITHUB_WORKSPACE/staging
+
+          # Download official KernelSU-Next Manager APKs
+          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU_Next_v1.1.1_12851-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.1.1_12851-release.apk"
           curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2_33355-release.apk"
+          curl -LSs https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk -o "$GITHUB_WORKSPACE/staging/APatch_11282_release.apk" || true
+
+          # Generate sha256 checksums
+          sha256sum *.zip *.apk > sha256sums.txt
 
           echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
           ls -lh $GITHUB_WORKSPACE/staging/
@@ -266,6 +275,7 @@ jobs:
           path: |
             staging/*.zip
             staging/*.apk
+            staging/sha256sums.txt
             out/arch/arm64/boot/Image*
             out/.config
             build.log
@@ -276,21 +286,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: Samsung Galaxy A41 / A31 KernelSU-Next v3.4.2 & SuSFS
+          name: Samsung Galaxy A41 / A31 KernelSU-Next & SuSFS v2.2.0
           body: |
             ## Samsung Galaxy A41 (SM-A415F) & A31 (SM-A315F) Kernel Build
             - **Device:** Samsung Galaxy ${{ matrix.device }}
             - **Chipset:** MediaTek Helio P65 (MT6768)
-            - **Root Solution:** KernelSU-Next v3.4.2
+            - **Root Solution:** KernelSU-Next (Legacy v1.1.1 / Next v3.4.2 ksud embedded)
             - **Stealth / Anti-Detection:** SuSFS v2.2.0 (kernel-4.14 patched)
             - **Compiler:** Proton Clang 13
-            - **Package:** AnyKernel3 flashable recovery ZIP
+            - **Package:** AnyKernel3 flashable recovery ZIP with auto-detected boot block partition
 
             ### Installation:
             1. Flash the AnyKernel3 ZIP in TWRP or OrangeFox Recovery.
             2. Reboot to System.
-            3. Install `KernelSU_Next_v3.4.2_33355-release.apk` to manage SuperUser permissions and modules.
+            3. Install matching Manager APK (`KernelSU_Next_v1.1.1` or `KernelSU_Next_v3.4.2`).
           files: |
             staging/*.zip
             staging/*.apk
+            staging/sha256sums.txt
             out/arch/arm64/boot/Image.gz-dtb
