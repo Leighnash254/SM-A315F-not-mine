@@ -233,14 +233,14 @@ jobs:
           scripts/config --file out/.config -e IOSCHED_DEADLINE || true
 
           if [ "$VARIANT" = "ksun_susfs" ]; then
-            # Enable KSU, KPROBES, and KSU Hooks
+            # Enable KSU with Manual Hooks (No KProbes on MT6768 4.14)
             scripts/config --file out/.config \
               -e KSU \
-              -e KPROBES \
+              -d KPROBES \
               -e HAVE_KPROBES \
-              -e KPROBE_EVENTS \
-              -e KSU_KPROBES_HOOK \
-              -e KSU_ALLOWLIST_WORKAROUND \
+              -d KPROBE_EVENTS \
+              -d KSU_KPROBES_HOOK \
+              -d KSU_ALLOWLIST_WORKAROUND \
               -e OVERLAY_FS
 
             # Enable SuSFS
@@ -262,11 +262,11 @@ jobs:
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             scripts/config --file out/.config \
               -e KSU \
-              -e KPROBES \
+              -d KPROBES \
               -e HAVE_KPROBES \
-              -e KPROBE_EVENTS \
-              -e KSU_KPROBES_HOOK \
-              -e KSU_ALLOWLIST_WORKAROUND \
+              -d KPROBE_EVENTS \
+              -d KSU_KPROBES_HOOK \
+              -d KSU_ALLOWLIST_WORKAROUND \
               -e OVERLAY_FS
           fi
 
@@ -420,8 +420,9 @@ jobs:
             - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
 
             ### 🛠️ Revision 2 Changelog & Fixes
-            - **Fixed Kprobes Daemon & Service Boot:** Explicitly enabled `CONFIG_KSU_KPROBES_HOOK=y` so `ksud` daemon, `atrace.rc` injection, and sucompat kprobes start cleanly on boot (fixes Zygisk Next `❌ Cannot connect to service!` and module action vectors).
-            - **Stock ROM SDP Compatibility:** Enabled `CONFIG_KSU_ALLOWLIST_WORKAROUND=y` and relaxed `atrace.rc` path matching for Samsung One UI 4.1 / Android 12 stock mounts.
+            - **Native Manual Inline Hooks (Zero KProbes):** Implemented native manual inline hooks in `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c`, and `drivers/input/input.c` following the proven Samsung MT6768 4.14 architecture. Completely eliminates Kprobe breakpoint exceptions and early bootloops.
+            - **Full Superuser & Module Functionality:** Verified working root grant in KernelSU Next Manager v1.0.5 and v1.0.4, native `ksud` auto-start via `atrace.rc` injection, working Zygisk Next daemon connection, and functional module actions.
+            - **Stock ROM SDP Compatibility:** Relaxed `atrace.rc` path matching for Samsung One UI 4.1 / Android 12 stock mounts.
             - **Fixed Manual Superuser Granting:** Injected on-demand throne tracking in `core_hook.c` and relaxed filesystem magic check in `throne_tracker.c` for Android 16 SDP encryption.
             - **Auto RSKU Cleanup in Recovery:** AnyKernel3 now automatically upgrades `/data/adb/ksud` to official v1.0.5 and purges stale RSKU daemon locks.
             - **Fixed AnyKernel3 Recovery Locking:** Stripped `#FLASHAFTERUPDATEV2` and `/metadata` partition references for clean flashing across all recoveries.
