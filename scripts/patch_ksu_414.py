@@ -434,3 +434,16 @@ if os.path.exists(ksu_c_path):
     with open(ksu_c_path, 'w', encoding='utf-8') as f:
         f.write(ksu_c)
     log('Patched drivers/kernelsu/ksu.c to initialize sucompat for manual hook mode')
+
+# 14. Patch drivers/kernelsu/Makefile for KernelSU-Next v1.1.1 versioning & tag
+mk_path = 'drivers/kernelsu/Makefile'
+if os.path.exists(mk_path):
+    with open(mk_path, 'r', encoding='utf-8') as f:
+        mk_code = f.read()
+    mk_code = mk_code.replace('\"v0.0.0\"', '\"v1.1.1\"')
+    mk_code = mk_code.replace('\"$(KSU_VERSION_TAG)\"', '\"v1.1.1\"')
+    mk_code = mk_code.replace('11998', '12851')
+    mk_code = mk_code.replace('$(KSU_VERSION)', '12851')
+    with open(mk_path, 'w', encoding='utf-8') as f:
+        f.write(mk_code)
+    log('Patched drivers/kernelsu/Makefile for KernelSU-Next v1.1.1 (Version: 12851, Tag: v1.1.1)')
