@@ -333,19 +333,17 @@ jobs:
           # Bundle official ksud v1.0.5 binary and auto-update /data/adb/ksud on flash
           if [ -f /tmp/ksud ]; then
             cp -vf /tmp/ksud ./ksud
-            cat << 'EOF' >> anykernel.sh
-
-# Auto-update /data/adb/ksud with official v1.0.5 and clean up stale RSKU state
-mount /data 2>/dev/null
-if [ -d /data/adb ]; then
-  ui_print "- Updating /data/adb/ksud to official v1.0.5..."
-  cp -f $home/ksud /data/adb/ksud 2>/dev/null
-  chmod 755 /data/adb/ksud 2>/dev/null
-  chown 0:0 /data/adb/ksud 2>/dev/null
-  chcon u:object_r:ksud_exec:s0 /data/adb/ksud 2>/dev/null || chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null
-  rm -f /data/adb/ksud.sock /data/adb/ksu/ksud.sock 2>/dev/null
-fi
-EOF
+            echo "" >> anykernel.sh
+            echo "# Auto-update /data/adb/ksud with official v1.0.5 and clean up stale RSKU state" >> anykernel.sh
+            echo "mount /data 2>/dev/null" >> anykernel.sh
+            echo "if [ -d /data/adb ]; then" >> anykernel.sh
+            echo "  ui_print \"- Updating /data/adb/ksud to official v1.0.5...\"" >> anykernel.sh
+            echo "  cp -f \$home/ksud /data/adb/ksud 2>/dev/null" >> anykernel.sh
+            echo "  chmod 755 /data/adb/ksud 2>/dev/null" >> anykernel.sh
+            echo "  chown 0:0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
+            echo "  chcon u:object_r:ksud_exec:s0 /data/adb/ksud 2>/dev/null || chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
+            echo "  rm -f /data/adb/ksud.sock /data/adb/ksu/ksud.sock 2>/dev/null" >> anykernel.sh
+            echo "fi" >> anykernel.sh
           fi
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
