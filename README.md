@@ -4,7 +4,7 @@
 ### High-Performance, Stealth-Rooted Linux 4.14 Kernel for MediaTek MT6768 (Helio P65)
 #### Designed for OneUI 8 (Android 16), OneUI 6/7 Ports, GSIs, and Stock Android 12
 
-[![Release](https://img.shields.io/github/v/release/hpbzareth/SM-A315F?color=blue&label=Latest%20Release&style=for-the-badge)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev2)
+[![Release](https://img.shields.io/github/v/release/hpbzareth/SM-A315F?color=blue&label=Latest%20Release&style=for-the-badge)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev3)
 [![Kernel Version](https://img.shields.io/badge/Kernel-4.14.186-orange?style=for-the-badge&logo=linux)](https://github.com/hpbzareth/SM-A315F)
 [![KernelSU-Next](https://img.shields.io/badge/KernelSU--Next-v1.0.5-brightgreen?style=for-the-badge)](https://github.com/KernelSU-Next/KernelSU-Next)
 [![SuSFS](https://img.shields.io/badge/SuSFS-v2.2.0-red?style=for-the-badge)](https://gitlab.com/simonpunk/susfs4ksu)
@@ -67,21 +67,21 @@ Built upon the battle-tested **Atrocious V6** codebase (by Abdullah Al Noman) an
 
 ---
 
-## 📥 Downloads (Revision 2 - Current Stable)
+## 📥 Downloads (Revision 3 - Current Stable)
 
-Download flashable ZIPs and companion APKs directly from the **[GitHub Releases Page (v1.0.0-Rev2)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev2)**:
+Download flashable ZIPs and companion APKs directly from the **[GitHub Releases Page (v1.0.0-Rev3)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev3)**:
 
 | Asset | Description | Size |
 | :--- | :--- | :--- |
-| `SM-A31-ZarethKernel-Rev2-Permissive-SuSFS.zip` | Flashable AnyKernel3 for Galaxy A31 | ~37.1 MB |
-| `SM-A41-ZarethKernel-Rev2-Permissive-SuSFS.zip` | Flashable AnyKernel3 for Galaxy A41 | ~37.3 MB |
+| `SM-A31-ZarethKernel-Rev3-Permissive-SuSFS.zip` | Flashable AnyKernel3 for Galaxy A31 | ~37.1 MB |
+| `SM-A41-ZarethKernel-Rev3-Permissive-SuSFS.zip` | Flashable AnyKernel3 for Galaxy A41 | ~37.3 MB |
 | `KernelSU_Next_v1.0.5_12430-release.apk` | **Recommended** Manager APK (v1.0.5) | ~7.9 MB |
 | `KernelSU_Next_v1.0.4_12335-release.apk` | Compatible Manager APK (v1.0.4) | ~7.8 MB |
 | `APatch_11282_release.apk` | APatch Root Manager | ~6.7 MB |
 | `sha256sums.txt` | Official SHA-256 Checksums | 525 B |
 
 > [!NOTE]
-> **Revision 1** is marked as `[OUTDATED]` due to early-boot SDP Manager UID tracking and daemon protocol mismatches. Always use **Revision 2 (Rev2)**.
+> **Revision 1** and **Revision 2** are marked as `[OUTDATED]`. Always flash **Revision 3 (Rev3)** for full compatibility and built-in bootloop recovery.
 
 ---
 
@@ -131,11 +131,19 @@ cat out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dts/mediatek/mt6768.dtb > o
 
 ## 📜 Changelog
 
-### Revision 2 (Rev2) — Current Stable
+### Revision 3 (Rev3) — Current Stable
+- **Resolved Zygisk Next `❌ Could not connect to service!` & Bootloop:**
+  - Diagnosed crash loop in `system_server` caused by leftover dirty modules (`zygisk_vector` / Vector by JingMatrix) attempting Dobby inline hooking into read-only guard pages (`0x703bec2000`, `SEGV_ACCERR`), which shut down Zygisk Next daemon (`STOP_BY_CRASH`) and triggered RescueParty recovery bootloops.
+  - Built-in AnyKernel3 auto-recovery: Automatically detects and disables `zygisk_vector` (`touch /data/adb/modules/zygisk_vector/disable`) and clears Zygisk Next crash lock (`rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status`) during flashing.
+- **Relaxed Module RWX Protections:** Disabled `CONFIG_STRICT_MODULE_RWX` to allow runtime memory hooking.
+- **Zero KProbes Manual Inline Hooks:** Retained native manual hooks in `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c`, and `drivers/input/input.c`.
+- **Branding:** Updated to `4.14.186 Zareth Kernel Rev3`.
+
+### Revision 2 (Rev2) — Outdated / Superseded
 - **Fixed Manual Superuser Granting:** Injected on-demand `track_throne()` in `core_hook.c` and relaxed filesystem magic check in `throne_tracker.c` for Android 16 SDP encryption.
 - **Fixed Module Removal:** Embedded official `ksud v1.0.5` binary matching Manager v1.0.5/v1.0.4 CLI protocol.
 - **Fixed AnyKernel3 Partition Locking:** Stripped `#FLASHAFTERUPDATEV2` and `/metadata` references to eliminate TWRP unlocking errors.
-- **Branding:** Updated to `4.14.186 Zareth Kernel Rev2`.
+- **Branding:** `4.14.186 Zareth Kernel Rev2`.
 
 ### Revision 1 (Rev1) — Outdated
 - Initial release featuring Mitrinket-inspired performance tuning, KernelSU-Next LTS, and SuSFS v2.2.0.
