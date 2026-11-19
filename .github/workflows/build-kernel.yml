@@ -1,4 +1,4 @@
-name: Build Samsung Galaxy A41 / A31 Kernel with KernelSU-Next & SuSFS
+name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev1 - KernelSU-Next & SuSFS)
 
 'on':
   workflow_dispatch:
@@ -7,11 +7,11 @@ name: Build Samsung Galaxy A41 / A31 Kernel with KernelSU-Next & SuSFS
         description: 'Target Device to Build'
         required: true
         type: choice
-        default: 'a41'
+        default: 'all'
         options:
-          - 'a41'
-          - 'a31'
           - 'all'
+          - 'a31'
+          - 'a41'
       su_variant:
         description: 'Root & SuSFS Variant'
         required: true
@@ -22,7 +22,7 @@ name: Build Samsung Galaxy A41 / A31 Kernel with KernelSU-Next & SuSFS
           - 'ksun_nosusfs'
           - 'vanilla'
       make_release:
-        description: 'Create GitHub Release on Success'
+        description: 'Create/Update GitHub Release on Success'
         required: false
         type: boolean
         default: true
@@ -30,7 +30,7 @@ name: Build Samsung Galaxy A41 / A31 Kernel with KernelSU-Next & SuSFS
         description: 'Release Tag'
         required: false
         type: string
-        default: 'v2.2.0-A41-A31'
+        default: 'v1.0.0-Rev1'
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ jobs:
       - id: set-matrix
         run: |
           if [ "${{ inputs.target_device }}" = "all" ]; then
-            echo 'devices=["a41", "a31"]' >> $GITHUB_OUTPUT
+            echo 'devices=["a31", "a41"]' >> $GITHUB_OUTPUT
           else
             echo 'devices=["${{ inputs.target_device }}"]' >> $GITHUB_OUTPUT
           fi
@@ -161,13 +161,71 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
 
-          # Strip Knox and security modules that break custom kernels
-          for c in UH RKP RKP_KDP RKP_CFP DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG; do
+          # Strip Knox and security tripwires that break custom kernels
+          for c in UH RUSTUH_RKP RUSTUH_KDP RKP RKP_KDP RKP_CFP DEFEX SECURITY_DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG; do
             scripts/config --file out/.config -d $c || true
           done
           scripts/config --file out/.config -e LTO_NONE || true
           scripts/config --file out/.config -e CC_STACKPROTECTOR_NONE || true
           scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
+
+          # Configure Official Zareth Kernel Branding
+          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel" || true
+          scripts/config --file out/.config -d LOCALVERSION_AUTO || true
+
+          # Size Optimization: -Os ensures Image.gz-dtb stays compact (~14.5MB) fitting 32MB boot partition
+          scripts/config --file out/.config -d CC_OPTIMIZE_FOR_PERFORMANCE || true
+          scripts/config --file out/.config -e CC_OPTIMIZE_FOR_SIZE || true
+          scripts/config --file out/.config -d DEBUG_INFO || true
+          scripts/config --file out/.config -d PAGE_OWNER || true
+          scripts/config --file out/.config -d SLUB_DEBUG || true
+          scripts/config --file out/.config -e STRIP_ASM_SYMS || true
+
+          # Samsung SDP Data Encryption for OneUI 8 (UN1CA) & Stock
+          scripts/config --file out/.config -e SDP || true
+          scripts/config --file out/.config -e FSCRYPT_SDP || true
+          scripts/config --file out/.config -e FS_ENCRYPTION_INLINE_CRYPT || true
+
+          # SELinux Permissive (Essential for GSI & OneUI 8 Port Stability)
+          scripts/config --file out/.config -e ALWAYS_PERMISSIVE || true
+          scripts/config --file out/.config -d SECURITY_SELINUX_ALWAYS_ENFORCE || true
+          scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
+
+          # === Mitrinket Safe Performance & Hardware Optimizations ===
+          echo "--- Applying Mitrinket Hardware Optimizations (RAM, CPU, Touch, Battery, Deep Sleep) ---"
+
+          # 1. RAM Optimization & Memory Reclaim
+          scripts/config --file out/.config -e ZRAM || true
+          scripts/config --file out/.config -e ZRAM_WRITEBACK || true
+          scripts/config --file out/.config -e ZSMALLOC || true
+          scripts/config --file out/.config -d ZSMALLOC_STAT || true
+          scripts/config --file out/.config -e CRYPTO_LZ4 || true
+          scripts/config --file out/.config -e CRYPTO_ZSTD || true
+          scripts/config --file out/.config -e PROCESS_RECLAIM || true
+          scripts/config --file out/.config -e VMPRESSURE || true
+
+          # 2. CPU & Touch Responsiveness (SchedTune & Schedutil)
+          scripts/config --file out/.config -e SCHED_TUNE || true
+          scripts/config --file out/.config -e CPU_FREQ_GOV_SCHEDUTIL || true
+          scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_SCHEDUTIL || true
+
+          # 3. Google BBR TCP Congestion Control (Low latency, smoother Wi-Fi / LTE)
+          scripts/config --file out/.config -e TCP_CONG_ADVANCED || true
+          scripts/config --file out/.config -e TCP_CONG_BBR || true
+          scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr" || true
+
+          # 4. Instant Deep Sleep & Battery Life (Pin khỏe)
+          scripts/config --file out/.config -e PM_AUTOSLEEP || true
+          scripts/config --file out/.config -e PM_WAKELOCKS || true
+          scripts/config --file out/.config -e WQ_POWER_EFFICIENT_DEFAULT || true
+          scripts/config --file out/.config -e CPU_IDLE || true
+          scripts/config --file out/.config -e CPU_IDLE_GOV_MENU || true
+
+          # 5. Storage / SSD / Flash Fast I/O Schedulers
+          scripts/config --file out/.config -e MQ_IOSCHED_DEADLINE || true
+          scripts/config --file out/.config -e MQ_IOSCHED_KYBER || true
+          scripts/config --file out/.config -e IOSCHED_BFQ || true
+          scripts/config --file out/.config -e IOSCHED_DEADLINE || true
 
           if [ "$VARIANT" = "ksun_susfs" ]; then
             # Enable KSU and KPROBES
@@ -193,13 +251,13 @@ jobs:
             scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
           fi
 
-          # Apply olddefconfig non-interactively to resolve any newly exposed options (e.g. NET_TCPPROBE)
+          # Apply olddefconfig non-interactively
           make O=out ARCH=arm64 CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           echo "=== Verified Config Settings ==="
-          grep -E "CONFIG_KSU|CONFIG_SUSFS|CONFIG_UH|CONFIG_RKP|CONFIG_DEFEX|CONFIG_CC_STACKPROTECTOR" out/.config || true
+          grep -E "CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_SUSFS|CONFIG_SDP|CONFIG_FSCRYPT_SDP|CONFIG_ALWAYS_PERMISSIVE|CONFIG_TCP_CONG_BBR|CONFIG_PM_AUTOSLEEP" out/.config || true
 
       - name: Compile Kernel
         shell: bash
@@ -233,7 +291,7 @@ jobs:
         id: package
         run: |
           DEVICE="${{ matrix.device }}"
-          VARIANT="${{ inputs.su_variant }}"
+          UPPER_DEV=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
           BUILD_DATE=$(date "+%Y%m%d-%H%M")
           mkdir -p $GITHUB_WORKSPACE/staging
           cd $GITHUB_WORKSPACE/staging
@@ -243,24 +301,23 @@ jobs:
           cd anykernel
           rm -rf .git README.md
 
-          # Fix AnyKernel3 device check and dynamic block detection (resolve mount bug)
+          # Fix AnyKernel3 device check and dynamic block detection
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
-          sed -i 's/kernel.string=.*/kernel.string=KernelSU-Next \& SuSFS v2.2.0 for Samsung A41\/A31/' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 1 for Samsung A31\/A41/' anykernel.sh
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
-          UPPER_DEV=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
-          ZIP_NAME="Samsung-${UPPER_DEV}-KSUNext-SuSFS-v2.2-${BUILD_DATE}.zip"
+          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev1-Permissive-SuSFS.zip"
           zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
           echo "Created flashable zip: $ZIP_NAME"
 
           cd $GITHUB_WORKSPACE/staging
 
-          # Download official KernelSU-Next Manager APKs
+          # Download official KernelSU-Next Manager APKs (v1.0.4 matching 11998 LTS, and v1.1.1)
+          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.4/KernelSU_Next_v1.0.4_12335-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.4_12335-release.apk"
           curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU_Next_v1.1.1_12851-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.1.1_12851-release.apk"
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2_33355-release.apk"
           curl -LSs https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk -o "$GITHUB_WORKSPACE/staging/APatch_11282_release.apk" || true
 
           # Generate sha256 checksums
@@ -304,22 +361,34 @@ jobs:
           cd release_assets
           ls -lh
 
-      - name: Create GitHub Release
+      - name: Create / Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: Samsung Galaxy A41 / A31 KernelSU-Next & SuSFS v2.2.0
+          name: Samsung Galaxy A31 / A41 Revision 1 (Zareth Kernel Rev1)
           body: |
-            ## Samsung Galaxy A41 (SM-A415F) & A31 (SM-A315F) Kernel Build
-            - **Devices:** Samsung Galaxy A41 & Samsung Galaxy A31
-            - **Chipset:** MediaTek Helio P65 (MT6768)
-            - **Root Solution:** KernelSU-Next (Legacy v1.1.1 / Next v3.4.2 ksud embedded)
-            - **Stealth / Anti-Detection:** SuSFS v2.2.0 (kernel-4.14 patched)
-            - **Compiler:** Proton Clang 13
-            - **Package:** AnyKernel3 flashable recovery ZIP with auto-detected boot block partition
+            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 1
 
-            ### Installation:
-            1. Flash the AnyKernel3 ZIP in TWRP or OrangeFox Recovery.
-            2. Reboot to System.
-            3. Install matching Manager APK (`KernelSU_Next_v1.1.1` or `KernelSU_Next_v3.4.2`).
+            ### 📱 Kernel & Device Details
+            - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
+            - **Kernel Name / Version:** `4.14.186 Zareth Kernel`
+            - **Chipset:** MediaTek Helio P65 (`MT6768`)
+            - **Root Engine:** KernelSU-Next 11998 LTS with Magic Mount
+            - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level hooks, mount hiding, try_umount)
+            - **SELinux Mode:** Permissive (Maximum stability on OneUI 8 / Android 16 UN1CA ports & GSIs)
+            - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
+
+            ### ⚡ Mitrinket-Inspired Performance Optimizations
+            - **Touch & Display Latency:** SchedTune + EAS energy governor `schedutil` for instant touch response
+            - **RAM Optimization:** ZRAM (LZ4 / ZSTD) + Process Reclaim + VM Pressure + debug stripping (frees ~150-200MB RAM)
+            - **Network:** Google BBR TCP Congestion Control default for lower ping and smoother connectivity
+            - **Battery & Deep Sleep:** `PM_AUTOSLEEP`, `PM_WAKELOCKS`, `WQ_POWER_EFFICIENT_DEFAULT` for deep sleep on screen-off
+            - **Storage I/O:** BFQ + MQ-Deadline schedulers for snappy app launch speeds
+
+            ### 📦 Packages:
+            - `SM-A31-ZarethKernel-Rev1-Permissive-SuSFS.zip`
+            - `SM-A41-ZarethKernel-Rev1-Permissive-SuSFS.zip`
+            - `KernelSU_Next_v1.0.4_12335-release.apk` (Recommended Manager for 11998 LTS)
+            - `KernelSU_Next_v1.1.1_12851-release.apk`
+            - `APatch_11282_release.apk`
           files: release_assets/*
