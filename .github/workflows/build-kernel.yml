@@ -306,6 +306,11 @@ jobs:
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
           sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 1 for Samsung A31\/A41/' anykernel.sh
 
+          # Fix Samsung recovery metadata & partition locking (strip #FLASHAFTERUPDATEV2 and metadata references)
+          echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
+          sed -i 's|for mount in /cache /data /metadata /persist; do|for mount in /cache; do|' META-INF/com/google/android/update-binary
+          sed -i 's|/metadata||g' META-INF/com/google/android/update-binary
+
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
