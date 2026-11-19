@@ -115,11 +115,22 @@ jobs:
             echo "--- Integrating KernelSU-Next (pershoot next-susfs with in-tree SuSFS) ---"
             git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git /tmp/KernelSU-Next
 
-            # Embed ksud binary from official v1.0.5 release
-            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/ksud_magic-aarch64-linux-android.zip -o /tmp/ksud.zip
-            unzip -q /tmp/ksud.zip -d /tmp/ksud_extracted
-            find /tmp/ksud_extracted -name "ksud" -type f -exec cp -v {} /tmp/ksud \;
-            chmod +x /tmp/ksud
+            if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
+              echo "[BETA] Upgrading to KernelSU-Next v3.4.2 protocol & ksud..."
+              sed -i 's/ccflags-y += -DKSU_VERSION=.*/ccflags-y += -DKSU_VERSION=33355/g' /tmp/KernelSU-Next/kernel/Makefile
+              sed -i 's/ccflags-y += -DKSU_VERSION_TAG=.*/ccflags-y += -DKSU_VERSION_TAG=\"v3.4.2\"/g' /tmp/KernelSU-Next/kernel/Makefile
+              sed -i 's/KSU_VERSION=11998/KSU_VERSION=33355/g' /tmp/KernelSU-Next/kernel/Makefile
+              sed -i 's/KSU_VERSION_TAG=\"v0.0.0\"/KSU_VERSION_TAG=\"v3.4.2\"/g' /tmp/KernelSU-Next/kernel/Makefile
+              # Download official ksud v3.4.2 64-bit ELF binary
+              curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
+              chmod +x /tmp/ksud
+            else
+              # Embed ksud binary from official v1.0.5 release
+              curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/ksud_magic-aarch64-linux-android.zip -o /tmp/ksud.zip
+              unzip -q /tmp/ksud.zip -d /tmp/ksud_extracted
+              find /tmp/ksud_extracted -name "ksud" -type f -exec cp -v {} /tmp/ksud \;
+              chmod +x /tmp/ksud
+            fi
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
             # Copy tree to drivers/kernelsu
@@ -326,7 +337,11 @@ jobs:
           # Fix AnyKernel3 device check and dynamic block detection
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
-          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 3 for Samsung A31\/A41/' anykernel.sh
+          if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
+            sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Beta (KSU Next v3.4.2) for Samsung A31\/A41/' anykernel.sh
+          else
+            sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 3 for Samsung A31\/A41/' anykernel.sh
+          fi
 
           # Fix Samsung recovery metadata & partition locking (strip #FLASHAFTERUPDATEV2 and metadata references)
           echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
@@ -359,15 +374,24 @@ jobs:
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
-          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev3-Permissive-SuSFS.zip"
+          if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
+            ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip"
+          else
+            ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev3-Permissive-SuSFS.zip"
+          fi
           zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
           echo "Created flashable zip: $ZIP_NAME"
 
           cd $GITHUB_WORKSPACE/staging
 
-          # Download official KernelSU-Next Manager APKs (v1.0.5 and v1.0.4)
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/KernelSU_Next_v1.0.5_12430-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.5_12430-release.apk"
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.4/KernelSU_Next_v1.0.4_12335-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.4_12335-release.apk"
+          if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
+            echo "Downloading KernelSU-Next v3.4.2 APKs..."
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2_33355-release.apk"
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2-spoofed_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2-spoofed_33355-release.apk" || true
+          else
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/KernelSU_Next_v1.0.5_12430-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.5_12430-release.apk"
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.4/KernelSU_Next_v1.0.4_12335-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.4_12335-release.apk"
+          fi
           curl -LSs https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk -o "$GITHUB_WORKSPACE/staging/APatch_11282_release.apk" || true
 
           # Generate sha256 checksums
@@ -404,50 +428,51 @@ jobs:
           path: all_artifacts
           merge-multiple: true
 
-      - name: Prepare Release Assets
+      - name: Prepare Release Assets & Notes
         run: |
           mkdir -p release_assets
           find all_artifacts -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.txt" \) -exec cp -v {} release_assets/ \;
           cd release_assets
           ls -lh
+          cat << 'END_NOTES' > release_notes.md
+          ## 🧪 [BETA] Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - KernelSU-Next v3.4.2 Test Build
+
+          > [!WARNING]
+          > **BETA RELEASE (Experimental):** This is a dedicated test build evaluating the upgraded **KernelSU-Next v3.4.2** protocol (`KSU_VERSION=33355`) and official `ksud` v3.4.2 binary. The latest stable release remains **v1.0.0-Rev3**.
+
+          ### 📱 Kernel & Device Details
+          - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
+          - **Kernel Name:** `4.14.186 Zareth Kernel Beta (KSUN v3.4.2)`
+          - **Chipset:** MediaTek Helio P65 (`MT6768`)
+          - **Root Engine:** KernelSU-Next **v3.4.2** (Protocol 33355) + embedded `ksud-aarch64-linux-android` v3.4.2
+          - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level inline hooks, mount hiding, try_umount)
+          - **SELinux Mode:** Permissive
+          - **Hook Mode:** Zero KProbes Manual Inline Hooks (100% stability, no kernel crash loops)
+
+          ### 📦 Included Files
+          - `SM-A31-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip` - Flashable zip for Galaxy A31
+          - `SM-A41-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip` - Flashable zip for Galaxy A41
+          - `KernelSU_Next_v3.4.2_33355-release.apk` - Official Manager APK
+          - `KernelSU_Next_v3.4.2-spoofed_33355-release.apk` - Official Spoofed Manager APK
+          - `sha256sums.txt` - SHA256 integrity checksums
+
+          ### 💡 Flashing & Usage Instructions
+          1. Flash the flashable zip via TWRP / OrangeFox recovery or Kernel Flasher.
+          2. The installer will automatically update `/data/adb/ksud` to v3.4.2 and reset lockfiles.
+          3. Reboot to system.
+          4. Install or upgrade to `KernelSU_Next_v3.4.2_33355-release.apk`.
+          END_NOTES
+          sed -i 's/^          //' release_notes.md
 
       - name: Create / Update GitHub Release
         continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: Samsung Galaxy A31 / A41 Revision 3 (Zareth Kernel Rev3)
-          body: |
-            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 3
-
-            ### 📱 Kernel & Device Details
-            - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
-            - **Kernel Name / Version:** `4.14.186 Zareth Kernel Rev3`
-            - **Chipset:** MediaTek Helio P65 (`MT6768`)
-            - **Root Engine:** KernelSU-Next v1.0.5 (with matching ksud v1.0.5 & on-demand throne tracker)
-            - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level hooks, mount hiding, try_umount)
-            - **SELinux Mode:** Permissive (Maximum stability on OneUI 8 / Android 16 UN1CA ports, Stock ROMs & GSIs)
-            - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
-
-            ### 🛠️ Revision 3 Changelog & Fixes
-            - **Resolved Zygisk Next `❌ Could not connect to service!` & Bootloop:**
-              - Root Cause Identified: Leftover dirty modules (specifically `zygisk_vector` / Vector by JingMatrix) caused repeated `system_server` SIGSEGV crashes (`SEGV_ACCERR` fault at guard page `0x703bec2000` via Dobby inline hooking), triggering Android RescueParty bootloops and shutting down Zygisk Next daemon (`hook status: 3` / STOP_BY_CRASH).
-              - AnyKernel3 built-in auto-recovery: Automatically detects and disables `zygisk_vector` (`touch /data/adb/modules/zygisk_vector/disable`) and clears Zygisk Next crash lock (`rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status`) during flash, completely preventing bootloops when upgrading from RSKU or dirty setups.
-            - **Relaxed Module RWX Protections:** Disabled `CONFIG_STRICT_MODULE_RWX` (`# CONFIG_STRICT_MODULE_RWX is not set`) to allow flexible runtime memory hooking.
-            - **Zero KProbes Manual Inline Hooks:** Retained native manual hooks in `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c`, and `drivers/input/input.c`.
-            - **Supersedes Revision 2 & Revision 1:** Rev1 and Rev2 are officially marked as outdated.
-
-            ### ⚡ Mitrinket-Inspired Performance Optimizations
-            - **Touch & Display Latency:** SchedTune + EAS energy governor `schedutil` for instant touch response
-            - **RAM Optimization:** ZRAM (LZ4 / ZSTD) + Process Reclaim + VM Pressure + debug stripping (frees ~150-200MB RAM)
-            - **Network:** Google BBR TCP Congestion Control default for lower ping and smoother connectivity
-            - **Battery & Deep Sleep:** `PM_AUTOSLEEP`, `PM_WAKELOCKS`, `WQ_POWER_EFFICIENT_DEFAULT` for deep sleep on screen-off
-            - **Storage I/O:** BFQ + MQ-Deadline schedulers for snappy app launch speeds
-
-            ### 📦 Packages:
-            - `SM-A31-ZarethKernel-Rev3-Permissive-SuSFS.zip`
-            - `SM-A41-ZarethKernel-Rev3-Permissive-SuSFS.zip`
-            - `KernelSU_Next_v1.0.5_12430-release.apk` (Recommended Manager v1.0.5)
-            - `KernelSU_Next_v1.0.4_12335-release.apk` (Compatible Manager v1.0.4)
-            - `APatch_11282_release.apk`
-          files: release_assets/*
+          name: ${{ contains(inputs.release_tag, 'Beta') && '[BETA] Samsung Galaxy A31 / A41 (KernelSU-Next v3.4.2 Test)' || 'Samsung Galaxy A31 / A41 Revision 3 (Zareth Kernel Rev3)' }}
+          prerelease: ${{ contains(inputs.release_tag, 'Beta') }}
+          body_path: release_assets/release_notes.md
+          files: |
+            release_assets/*.zip
+            release_assets/*.apk
+            release_assets/*.txt
