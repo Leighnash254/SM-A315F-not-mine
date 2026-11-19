@@ -34,7 +34,6 @@ for kh_path in ['drivers/kernelsu/include/ksu.h', 'drivers/kernelsu/ksu.h']:
                 f.write(kh)
             log(f'Patched {kh_path} with Version: {override_ver}, Tag: {override_tag}')
         elif '#define KERNEL_SU_VERSION ' in kh:
-            # Already patched or different layout
             log(f'{kh_path} already configured for versioning')
 
 # Also override in Kbuild if present
@@ -42,7 +41,6 @@ kbuild_path = 'drivers/kernelsu/Kbuild'
 if os.path.exists(kbuild_path):
     with open(kbuild_path, 'r', encoding='utf-8') as f:
         kb = f.read()
-    # Ensure KSU_VERSION_OVERRIDE and KSU_VERSION_TAG_OVERRIDE take effect
     if 'KSU_VERSION_FALLBACK := 1' in kb:
         kb = kb.replace('KSU_VERSION_FALLBACK := 1', f'KSU_VERSION_FALLBACK := {override_ver}')
     if 'KSU_VERSION_TAG_FALLBACK := v0.0.1' in kb:
@@ -106,8 +104,6 @@ for tt_path in ['drivers/kernelsu/manager/throne_tracker.c', 'drivers/kernelsu/t
             with open(tt_path, 'w', encoding='utf-8') as f:
                 f.write(tt_code)
             log(f'Relaxed filesystem magic check in {tt_path} for Android 16 / OneUI 8')
-        else:
-            log(f'Note: magic_check block not found or already relaxed in {tt_path}')
 
 # 5. Ensure kernel/reboot.c contains ksu_handle_sys_reboot hook
 reboot_path = 'kernel/reboot.c'
@@ -131,12 +127,53 @@ if os.path.exists(reboot_path):
     else:
         log('kernel/reboot.c already verified to have ksu_handle_sys_reboot hook')
 
-# 6. Ensure KSU_MANUAL_HOOK is default y in drivers/kernelsu/Kconfig
-kconfig_path = 'drivers/kernelsu/Kconfig'
-if os.path.exists(kconfig_path):
-    with open(kconfig_path, 'r', encoding='utf-8') as f:
-        kc = f.read()
-    if 'config KSU_MANUAL_HOOK' in kc:
-        log('drivers/kernelsu/Kconfig verified for KSU_MANUAL_HOOK')
+# 6. Ensure fs/namespace.c contains can_umount and path_umount
+ns_path = 'fs/namespace.c'
+if os.path.exists(ns_path):
+    with open(ns_path, 'r', encoding='utf-8') as f:
+        ns_code = f.read()
+    if 'int path_umount(struct path *path, int flags)' not in ns_code:
+        target_ns = 'static bool is_mnt_ns_file(struct dentry *dentry)'
+        ns_impl = """static int can_umount(const struct path *path, int flags)
+{
+	struct mount *mnt = real_mount(path->mnt);
+
+	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+		return -EINVAL;
+	if (!may_mount())
+		return -EPERM;
+	if (path->dentry != path->mnt->mnt_root)
+		return -EINVAL;
+	if (!check_mnt(mnt))
+		return -EINVAL;
+	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+		return -EINVAL;
+	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	return 0;
+}
+
+int path_umount(struct path *path, int flags)
+{
+	struct mount *mnt = real_mount(path->mnt);
+	int ret;
+
+	ret = can_umount(path, flags);
+	if (!ret)
+		ret = do_umount(mnt, flags);
+	dput(path->dentry);
+	mntput_no_expire(mnt);
+	return ret;
+}
+EXPORT_SYMBOL(path_umount);
+
+"""
+        if target_ns in ns_code:
+            ns_code = ns_code.replace(target_ns, ns_impl + target_ns, 1)
+            with open(ns_path, 'w', encoding='utf-8') as f:
+                f.write(ns_code)
+            log('Added can_umount and path_umount to fs/namespace.c')
+    else:
+        log('fs/namespace.c already contains path_umount')
 
 log('KernelSU-Next legacy patching completed successfully!')
