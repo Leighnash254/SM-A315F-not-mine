@@ -4,7 +4,7 @@
 ### Nhân Linux 4.14 Hiệu Năng Cao, Tích Hợp KernelSU-Next & Ẩn Root SuSFS cho MediaTek MT6768 (Helio P65)
 #### Tương thích tối ưu với OneUI 8 (Android 16), các bản Rom Port OneUI 6/7, GSI và Stock Android 12
 
-[![Bản phát hành](https://img.shields.io/github/v/release/hpbzareth/SM-A315F?color=blue&label=B%E1%BA%A3n%20M%E1%BB%9Bi%20Nh%E1%BA%A5t&style=for-the-badge)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev2)
+[![Bản phát hành](https://img.shields.io/github/v/release/hpbzareth/SM-A315F?color=blue&label=B%E1%BA%A3n%20M%E1%BB%9Bi%20Nh%E1%BA%A5t&style=for-the-badge)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev3)
 [![Phiên bản Kernel](https://img.shields.io/badge/Kernel-4.14.186-orange?style=for-the-badge&logo=linux)](https://github.com/hpbzareth/SM-A315F)
 [![KernelSU-Next](https://img.shields.io/badge/KernelSU--Next-v1.0.5-brightgreen?style=for-the-badge)](https://github.com/KernelSU-Next/KernelSU-Next)
 [![SuSFS](https://img.shields.io/badge/SuSFS-v2.2.0-red?style=for-the-badge)](https://gitlab.com/simonpunk/susfs4ksu)
@@ -67,21 +67,21 @@
 
 ---
 
-## 📥 Tải Về (Revision 2 - Bản Ổn Định Hiện Tại)
+## 📥 Tải Về (Revision 3 - Bản Ổn Định Hiện Tại)
 
-Tải file zip flash và app quản lý tại trang **[GitHub Releases (v1.0.0-Rev2)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev2)**:
+Tải file zip flash và app quản lý tại trang **[GitHub Releases (v1.0.0-Rev3)](https://github.com/hpbzareth/SM-A315F/releases/tag/v1.0.0-Rev3)**:
 
 | File Cài Đặt | Mô Tả | Dung Lượng |
 | :--- | :--- | :--- |
-| `SM-A31-ZarethKernel-Rev2-Permissive-SuSFS.zip` | File zip flash qua Recovery cho Galaxy A31 | ~37.1 MB |
-| `SM-A41-ZarethKernel-Rev2-Permissive-SuSFS.zip` | File zip flash qua Recovery cho Galaxy A41 | ~37.3 MB |
+| `SM-A31-ZarethKernel-Rev3-Permissive-SuSFS.zip` | File zip flash qua Recovery cho Galaxy A31 | ~37.1 MB |
+| `SM-A41-ZarethKernel-Rev3-Permissive-SuSFS.zip` | File zip flash qua Recovery cho Galaxy A41 | ~37.3 MB |
 | `KernelSU_Next_v1.0.5_12430-release.apk` | **Khuyên dùng:** App quản lý KernelSU Next (v1.0.5) | ~7.9 MB |
 | `KernelSU_Next_v1.0.4_12335-release.apk` | App quản lý KernelSU Next (v1.0.4) | ~7.8 MB |
 | `APatch_11282_release.apk` | App quản lý APatch Root | ~6.7 MB |
 | `sha256sums.txt` | Mã kiểm tra toàn vẹn SHA-256 | 525 B |
 
 > [!WARNING]
-> **Bản Revision 1** đã bị đánh dấu là `[OUTDATED]` do lỗi kẹt UID Manager lúc khởi động và lệch giao thức daemon `ksud`. **Tuyệt đối khuyến nghị anh em sử dụng bản Revision 2 (Rev2)**.
+> **Bản Revision 1** và **Revision 2** đã bị đánh dấu là `[OUTDATED]` (Lỗi thời). **Tuyệt đối khuyến nghị anh em sử dụng bản Revision 3 (Rev3)** để có tính năng tự động cứu hộ bootloop và tương thích module hoàn hảo.
 
 ---
 
@@ -104,11 +104,19 @@ Tải file zip flash và app quản lý tại trang **[GitHub Releases (v1.0.0-R
 
 ## 📜 Lịch Sử Phiên Bản (Changelog)
 
-### Revision 2 (Rev2) — Bản Ổn Định Mới Nhất
-- **Sửa Lỗi Cấp Superuser Thủ Công:** Tích hợp cơ chế quét on-demand `track_throne()` vào `core_hook.c` và bỏ qua kiểm tra magic con trong `throne_tracker.c` cho Android 16 SDP.
+### Revision 3 (Rev3) — Bản Ổn Định Mới Nhất
+- **Khắc Phục Lỗi Zygisk Next `❌ Could not connect to service!` & Bootloop:**
+  - Xác định nguyên nhân gốc rễ: Module cũ còn sót từ RSKU (đặc biệt là `zygisk_vector` / Vector by JingMatrix) thực hiện Dobby inline hooking vào trang bảo vệ `0x703bec2000` (`SEGV_ACCERR`), gây crash liên tục `system_server`, kích hoạt RescueParty cứu hộ bootloop của Android và ngắt daemon Zygisk Next (`STOP_BY_CRASH`).
+  - Tự động cứu hộ trong AnyKernel3: Tự động phát hiện và vô hiệu hóa module gây crash (`touch /data/adb/modules/zygisk_vector/disable`) đồng thời giải phóng khóa crash của Zygisk Next (`rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status`) khi flash zip.
+- **Nới Lỏng Bảo Vệ Bộ Nhớ Module:** Tắt `CONFIG_STRICT_MODULE_RWX` để cho phép can thiệp bộ nhớ module lúc runtime.
+- **Cơ chế Hook Thủ Công Không KProbe:** Duy trì native manual hooks trong `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c` và `drivers/input/input.c`.
+- **Định danh:** Nâng cấp tên kernel thành `4.14.186 Zareth Kernel Rev3`.
+
+### Revision 2 (Rev2) — Đã Lỗi Thời / Bị Thay Thế
+- **Sửa Lỗi Cấp Superuser Thủ Công:** Tích hợp cơ chế quét on-demand `track_throne()` vào `core_hook.c` và bỏ qua kiểm tra magic con trong `throne_tracker.c`.
 - **Sửa Lỗi Gỡ Module:** Nhúng đúng binary `ksud v1.0.5` đồng bộ hoàn toàn chuẩn giao thức với Manager v1.0.5 và v1.0.4.
-- **Sửa Lỗi Khóa Phân Vùng Recovery:** Loại bỏ hoàn toàn `#FLASHAFTERUPDATEV2` và các mount `/metadata` trong script cài đặt AnyKernel3.
-- **Định danh:** Nâng cấp tên kernel thành `4.14.186 Zareth Kernel Rev2`.
+- **Sửa Lỗi Khóa Phân Vùng Recovery:** Loại bỏ hoàn toàn `#FLASHAFTERUPDATEV2` và các mount `/metadata`.
+- **Định danh:** `4.14.186 Zareth Kernel Rev2`.
 
 ### Revision 1 (Rev1) — Đã Lỗi Thời
 - Phiên bản đầu tiên tích hợp tối ưu Mitrinket, KernelSU-Next LTS và SuSFS v2.2.0.
