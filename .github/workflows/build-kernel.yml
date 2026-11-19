@@ -1,4 +1,4 @@
-name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev1 - KernelSU-Next & SuSFS)
+name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev2 - KernelSU-Next & SuSFS)
 
 'on':
   workflow_dispatch:
@@ -30,7 +30,7 @@ name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev1 - KernelSU-Next & SuSFS
         description: 'Release Tag'
         required: false
         type: string
-        default: 'v1.0.0-Rev1'
+        default: 'v1.0.0-Rev2'
 
 permissions:
   contents: write
@@ -115,8 +115,10 @@ jobs:
             echo "--- Integrating KernelSU-Next (pershoot next-susfs with in-tree SuSFS) ---"
             git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git /tmp/KernelSU-Next
 
-            # Embed ksud binary from official v3.4.2 release
-            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
+            # Embed ksud binary from official v1.0.5 release
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/ksud_magic-aarch64-linux-android.zip -o /tmp/ksud.zip
+            unzip -q /tmp/ksud.zip -d /tmp/ksud_extracted
+            find /tmp/ksud_extracted -name "ksud" -type f -exec cp -v {} /tmp/ksud \;
             chmod +x /tmp/ksud
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
@@ -132,7 +134,10 @@ jobs:
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
             git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
-            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
+            # Embed ksud binary from official v1.0.5 release
+            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/ksud_magic-aarch64-linux-android.zip -o /tmp/ksud.zip
+            unzip -q /tmp/ksud.zip -d /tmp/ksud_extracted
+            find /tmp/ksud_extracted -name "ksud" -type f -exec cp -v {} /tmp/ksud \;
             chmod +x /tmp/ksud
             xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
@@ -170,7 +175,7 @@ jobs:
           scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
 
           # Configure Official Zareth Kernel Branding
-          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel" || true
+          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel Rev2" || true
           scripts/config --file out/.config -d LOCALVERSION_AUTO || true
 
           # Size Optimization: -Os ensures Image.gz-dtb stays compact (~14.5MB) fitting 32MB boot partition
@@ -304,7 +309,7 @@ jobs:
           # Fix AnyKernel3 device check and dynamic block detection
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
-          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 1 for Samsung A31\/A41/' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 2 for Samsung A31\/A41/' anykernel.sh
 
           # Fix Samsung recovery metadata & partition locking (strip #FLASHAFTERUPDATEV2 and metadata references)
           echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
@@ -314,15 +319,15 @@ jobs:
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
-          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev1-Permissive-SuSFS.zip"
+          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev2-Permissive-SuSFS.zip"
           zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
           echo "Created flashable zip: $ZIP_NAME"
 
           cd $GITHUB_WORKSPACE/staging
 
-          # Download official KernelSU-Next Manager APKs (v1.0.4 matching 11998 LTS, and v1.1.1)
+          # Download official KernelSU-Next Manager APKs (v1.0.5 and v1.0.4)
+          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/KernelSU_Next_v1.0.5_12430-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.5_12430-release.apk"
           curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.4/KernelSU_Next_v1.0.4_12335-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.0.4_12335-release.apk"
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU_Next_v1.1.1_12851-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v1.1.1_12851-release.apk"
           curl -LSs https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk -o "$GITHUB_WORKSPACE/staging/APatch_11282_release.apk" || true
 
           # Generate sha256 checksums
@@ -371,18 +376,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: Samsung Galaxy A31 / A41 Revision 1 (Zareth Kernel Rev1)
+          name: Samsung Galaxy A31 / A41 Revision 2 (Zareth Kernel Rev2)
           body: |
-            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 1
+            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 2
 
             ### 📱 Kernel & Device Details
             - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
-            - **Kernel Name / Version:** `4.14.186 Zareth Kernel`
+            - **Kernel Name / Version:** `4.14.186 Zareth Kernel Rev2`
             - **Chipset:** MediaTek Helio P65 (`MT6768`)
-            - **Root Engine:** KernelSU-Next 11998 LTS with Magic Mount
+            - **Root Engine:** KernelSU-Next v1.0.5 (with matching ksud v1.0.5 & on-demand throne tracker)
             - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level hooks, mount hiding, try_umount)
             - **SELinux Mode:** Permissive (Maximum stability on OneUI 8 / Android 16 UN1CA ports & GSIs)
             - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
+
+            ### 🛠️ Revision 2 Changelog & Fixes
+            - **Fixed Manual Superuser Granting:** Injected on-demand throne tracking in `core_hook.c` and relaxed filesystem magic check in `throne_tracker.c` for Android 16 SDP encryption.
+            - **Fixed Module Removal:** Embedded official `ksud v1.0.5` daemon matching Manager v1.0.5/v1.0.4 CLI protocol.
+            - **Fixed AnyKernel3 Recovery Locking:** Stripped `#FLASHAFTERUPDATEV2` and `/metadata` partition references for clean flashing across all recoveries.
 
             ### ⚡ Mitrinket-Inspired Performance Optimizations
             - **Touch & Display Latency:** SchedTune + EAS energy governor `schedutil` for instant touch response
@@ -392,9 +402,9 @@ jobs:
             - **Storage I/O:** BFQ + MQ-Deadline schedulers for snappy app launch speeds
 
             ### 📦 Packages:
-            - `SM-A31-ZarethKernel-Rev1-Permissive-SuSFS.zip`
-            - `SM-A41-ZarethKernel-Rev1-Permissive-SuSFS.zip`
-            - `KernelSU_Next_v1.0.4_12335-release.apk` (Recommended Manager for 11998 LTS)
-            - `KernelSU_Next_v1.1.1_12851-release.apk`
+            - `SM-A31-ZarethKernel-Rev2-Permissive-SuSFS.zip`
+            - `SM-A41-ZarethKernel-Rev2-Permissive-SuSFS.zip`
+            - `KernelSU_Next_v1.0.5_12430-release.apk` (Recommended Manager v1.0.5)
+            - `KernelSU_Next_v1.0.4_12335-release.apk` (Compatible Manager v1.0.4)
             - `APatch_11282_release.apk`
           files: release_assets/*
