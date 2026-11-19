@@ -233,8 +233,15 @@ jobs:
           scripts/config --file out/.config -e IOSCHED_DEADLINE || true
 
           if [ "$VARIANT" = "ksun_susfs" ]; then
-            # Enable KSU and KPROBES
-            scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
+            # Enable KSU, KPROBES, and KSU Hooks
+            scripts/config --file out/.config \
+              -e KSU \
+              -e KPROBES \
+              -e HAVE_KPROBES \
+              -e KPROBE_EVENTS \
+              -e KSU_KPROBES_HOOK \
+              -e KSU_ALLOWLIST_WORKAROUND \
+              -e OVERLAY_FS
 
             # Enable SuSFS
             scripts/config --file out/.config -e KSU_SUSFS \
@@ -253,7 +260,14 @@ jobs:
               -d KSU_SUSFS_SUS_SU || true
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
-            scripts/config --file out/.config -e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS -e OVERLAY_FS
+            scripts/config --file out/.config \
+              -e KSU \
+              -e KPROBES \
+              -e HAVE_KPROBES \
+              -e KPROBE_EVENTS \
+              -e KSU_KPROBES_HOOK \
+              -e KSU_ALLOWLIST_WORKAROUND \
+              -e OVERLAY_FS
           fi
 
           # Apply olddefconfig non-interactively
@@ -262,7 +276,7 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
           echo "=== Verified Config Settings ==="
-          grep -E "CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_SUSFS|CONFIG_SDP|CONFIG_FSCRYPT_SDP|CONFIG_ALWAYS_PERMISSIVE|CONFIG_TCP_CONG_BBR|CONFIG_PM_AUTOSLEEP" out/.config || true
+          grep -E "CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_SUSFS|CONFIG_SDP|CONFIG_FSCRYPT_SDP|CONFIG_ALWAYS_PERMISSIVE|CONFIG_TCP_CONG_BBR|CONFIG_PM_AUTOSLEEP|CONFIG_KPROBE" out/.config || true
 
       - name: Compile Kernel
         shell: bash
@@ -315,6 +329,24 @@ jobs:
           echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
           sed -i 's|for mount in /cache /data /metadata /persist; do|for mount in /cache; do|' META-INF/com/google/android/update-binary
           sed -i 's|/metadata||g' META-INF/com/google/android/update-binary
+
+          # Bundle official ksud v1.0.5 binary and auto-update /data/adb/ksud on flash
+          if [ -f /tmp/ksud ]; then
+            cp -vf /tmp/ksud ./ksud
+            cat << 'EOF' >> anykernel.sh
+
+# Auto-update /data/adb/ksud with official v1.0.5 and clean up stale RSKU state
+mount /data 2>/dev/null
+if [ -d /data/adb ]; then
+  ui_print "- Updating /data/adb/ksud to official v1.0.5..."
+  cp -f $home/ksud /data/adb/ksud 2>/dev/null
+  chmod 755 /data/adb/ksud 2>/dev/null
+  chown 0:0 /data/adb/ksud 2>/dev/null
+  chcon u:object_r:ksud_exec:s0 /data/adb/ksud 2>/dev/null || chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null
+  rm -f /data/adb/ksud.sock /data/adb/ksu/ksud.sock 2>/dev/null
+fi
+EOF
+          fi
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
@@ -390,8 +422,10 @@ jobs:
             - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
 
             ### 🛠️ Revision 2 Changelog & Fixes
+            - **Fixed Kprobes Daemon & Service Boot:** Explicitly enabled `CONFIG_KSU_KPROBES_HOOK=y` so `ksud` daemon, `atrace.rc` injection, and sucompat kprobes start cleanly on boot (fixes Zygisk Next `❌ Cannot connect to service!` and module action vectors).
+            - **Stock ROM SDP Compatibility:** Enabled `CONFIG_KSU_ALLOWLIST_WORKAROUND=y` and relaxed `atrace.rc` path matching for Samsung One UI 4.1 / Android 12 stock mounts.
             - **Fixed Manual Superuser Granting:** Injected on-demand throne tracking in `core_hook.c` and relaxed filesystem magic check in `throne_tracker.c` for Android 16 SDP encryption.
-            - **Fixed Module Removal:** Embedded official `ksud v1.0.5` daemon matching Manager v1.0.5/v1.0.4 CLI protocol.
+            - **Auto RSKU Cleanup in Recovery:** AnyKernel3 now automatically upgrades `/data/adb/ksud` to official v1.0.5 and purges stale RSKU daemon locks.
             - **Fixed AnyKernel3 Recovery Locking:** Stripped `#FLASHAFTERUPDATEV2` and `/metadata` partition references for clean flashing across all recoveries.
 
             ### ⚡ Mitrinket-Inspired Performance Optimizations
