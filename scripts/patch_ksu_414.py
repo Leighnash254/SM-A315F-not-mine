@@ -435,15 +435,33 @@ if os.path.exists(ksu_c_path):
         f.write(ksu_c)
     log('Patched drivers/kernelsu/ksu.c to initialize sucompat for manual hook mode')
 
-# 14. Patch drivers/kernelsu/Makefile for KernelSU-Next v1.1.1 versioning & tag
+# 14. Patch drivers/kernelsu/ksu.h and Makefile for versioning & tag
+override_ver = os.environ.get('KSU_OVERRIDE_VERSION', '33355')
+override_tag = os.environ.get('KSU_OVERRIDE_VERSION_TAG', 'v3.4.2')
+
+ksu_h_path = 'drivers/kernelsu/ksu.h'
+if os.path.exists(ksu_h_path):
+    with open(ksu_h_path, 'r', encoding='utf-8') as f:
+        kh = f.read()
+    target_macro = '#define KERNEL_SU_VERSION KSU_VERSION\n#define KERNEL_SU_VERSION_TAG KSU_VERSION_TAG'
+    replacement_macro = f'#undef KERNEL_SU_VERSION\n#define KERNEL_SU_VERSION {override_ver}\n#undef KERNEL_SU_VERSION_TAG\n#define KERNEL_SU_VERSION_TAG "{override_tag}"'
+    if target_macro in kh:
+        kh = kh.replace(target_macro, replacement_macro, 1)
+        with open(ksu_h_path, 'w', encoding='utf-8') as f:
+            f.write(kh)
+        log(f'Patched drivers/kernelsu/ksu.h with Version: {override_ver}, Tag: {override_tag}')
+    else:
+        log('Note: target_macro not found in ksu.h')
+
 mk_path = 'drivers/kernelsu/Makefile'
 if os.path.exists(mk_path):
     with open(mk_path, 'r', encoding='utf-8') as f:
         mk_code = f.read()
-    mk_code = mk_code.replace('\"v0.0.0\"', '\"v1.1.1\"')
-    mk_code = mk_code.replace('\"$(KSU_VERSION_TAG)\"', '\"v1.1.1\"')
-    mk_code = mk_code.replace('11998', '12851')
-    mk_code = mk_code.replace('$(KSU_VERSION)', '12851')
+    mk_code = mk_code.replace('"v0.0.0"', f'"{override_tag}"')
+    mk_code = mk_code.replace('"$(KSU_VERSION_TAG)"', f'"{override_tag}"')
+    mk_code = mk_code.replace('11998', override_ver)
+    mk_code = mk_code.replace('12851', override_ver)
+    mk_code = mk_code.replace('$(KSU_VERSION)', override_ver)
     with open(mk_path, 'w', encoding='utf-8') as f:
         f.write(mk_code)
-    log('Patched drivers/kernelsu/Makefile for KernelSU-Next v1.1.1 (Version: 12851, Tag: v1.1.1)')
+    log(f'Patched drivers/kernelsu/Makefile with Version: {override_ver}, Tag: {override_tag}')
