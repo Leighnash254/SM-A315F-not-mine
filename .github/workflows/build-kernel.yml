@@ -59,6 +59,9 @@ jobs:
       matrix:
         device: ${{ fromJson(needs.matrix_prep.outputs.devices) }}
 
+    env:
+      KSU_VERSION_OVERRIDE: 33355
+      KSU_VERSION_TAG_OVERRIDE: v3.4.2
     steps:
       - name: Free Runner Disk Space
         run: |
@@ -112,38 +115,29 @@ jobs:
             sed -i 's/#define SUSFS_VERSION .*/#define SUSFS_VERSION "v2.2.0"/' include/linux/susfs.h
             patch -p1 --fuzz=3 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
 
-            echo "--- Integrating KernelSU-Next (pershoot next-susfs with in-tree SuSFS) ---"
-            git clone --depth=1 -b next-susfs https://github.com/pershoot/KernelSU-Next.git /tmp/KernelSU-Next
+            echo "--- Integrating KernelSU-Next (Legacy Branch) ---"
+            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
 
-            # Embed ksud binary from official v3.4.2 release
-            echo "Downloading official ksud v3.4.2 64-bit ELF binary..."
-            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android -o /tmp/ksud
-            chmod +x /tmp/ksud
-            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
-
-            # Copy tree to drivers/kernelsu
             rm -rf drivers/kernelsu
             cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
+            rm -rf drivers/kernelsu/include/uapi
+            cp -r /tmp/KernelSU-Next/uapi drivers/kernelsu/include/uapi
+
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-            # Patch pkg_observer.c, core_hook.c, fdinfo.c, ksu.h, Makefile for Linux 4.14 & v3.4.2
-            export KSU_OVERRIDE_VERSION="33355"
-            export KSU_OVERRIDE_VERSION_TAG="v3.4.2"
+            # Patch for Linux 4.14 & legacy branch layout
             python3 scripts/patch_ksu_414.py
 
           elif [ "$VARIANT" = "ksun_nosusfs" ]; then
             echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
             git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
-            # Embed ksud binary from official v1.0.5 release
-            curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.0.5/ksud_magic-aarch64-linux-android.zip -o /tmp/ksud.zip
-            unzip -q /tmp/ksud.zip -d /tmp/ksud_extracted
-            find /tmp/ksud_extracted -name "ksud" -type f -exec cp -v {} /tmp/ksud \;
-            chmod +x /tmp/ksud
-            xxd -i /tmp/ksud | sed 's/_tmp_ksud_len/ksud_size/' | sed 's/unsigned char _tmp_ksud/const char ksud/' > /tmp/KernelSU-Next/kernel/embed_ksud.c
 
             rm -rf drivers/kernelsu
             cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
+            rm -rf drivers/kernelsu/include/uapi
+            cp -r /tmp/KernelSU-Next/uapi drivers/kernelsu/include/uapi
+
             grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
             grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
             python3 scripts/patch_ksu_414.py
@@ -189,6 +183,12 @@ jobs:
           scripts/config --file out/.config -d PAGE_OWNER || true
           scripts/config --file out/.config -d SLUB_DEBUG || true
           scripts/config --file out/.config -e STRIP_ASM_SYMS || true
+
+          # KernelSU-Next Legacy Manual Hook Configuration (Zero KProbes)
+          scripts/config --file out/.config -e KSU || true
+          scripts/config --file out/.config -e KSU_MANUAL_HOOK || true
+          scripts/config --file out/.config -d KSU_KPROBES_HOOK || true
+          scripts/config --file out/.config -d KSU_SYSCALL_TABLE_HOOK || true
 
           # Samsung SDP Data Encryption for OneUI 8 (UN1CA) & Stock
           scripts/config --file out/.config -e SDP || true
