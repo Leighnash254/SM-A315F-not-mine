@@ -380,28 +380,18 @@ if os.path.exists('drivers/kernelsu/throne_tracker.c'):
     else:
         log('Note: magic_check block not found in throne_tracker.c')
 
-# 11. Patch drivers/kernelsu/Kconfig (Default KSU_KPROBES_HOOK to y)
+# 11. Ensure KSU_KPROBES_HOOK stays default n (Manual hook mode)
 kconfig_path = 'drivers/kernelsu/Kconfig'
 if os.path.exists(kconfig_path):
     with open(kconfig_path, 'r', encoding='utf-8') as f:
         kc = f.read()
-    target_kc = '''config KSU_KPROBES_HOOK
-	bool "Use kprobes for kernelsu"
-	depends on KSU
-	depends on KPROBES
-	default n'''
-    replace_kc = '''config KSU_KPROBES_HOOK
-	bool "Use kprobes for kernelsu"
-	depends on KSU
-	depends on KPROBES
-	default y'''
-    if target_kc in kc:
-        kc = kc.replace(target_kc, replace_kc, 1)
+    if 'default y' in kc and 'config KSU_KPROBES_HOOK' in kc:
+        kc = kc.replace('default y', 'default n', 1)
         with open(kconfig_path, 'w', encoding='utf-8') as f:
             f.write(kc)
-        log('Set KSU_KPROBES_HOOK default y in drivers/kernelsu/Kconfig')
+        log('Ensured KSU_KPROBES_HOOK default n in drivers/kernelsu/Kconfig')
     else:
-        log('Note: target_kc not found or already patched in Kconfig')
+        log('KSU_KPROBES_HOOK kept at default n for manual hooking')
 
 # 12. Patch drivers/kernelsu/ksud.c for robust atrace.rc matching (Stock ROM /system_root)
 ksud_path = 'drivers/kernelsu/ksud.c'
@@ -418,7 +408,7 @@ if os.path.exists(ksud_path):
     else:
         log('Note: target_atrace not found in ksud.c')
 
-# 13. Patch drivers/kernelsu/ksu.c (Ensure ksu_sucompat_init and ksu_ksud_init run reliably)
+# 13. Patch drivers/kernelsu/ksu.c (Ensure ksu_sucompat_init runs for manual hook mode)
 ksu_c_path = 'drivers/kernelsu/ksu.c'
 if os.path.exists(ksu_c_path):
     with open(ksu_c_path, 'r', encoding='utf-8') as f:
@@ -426,8 +416,8 @@ if os.path.exists(ksu_c_path):
     t_init = """#ifdef CONFIG_KSU_KPROBES_HOOK
 	ksu_sucompat_init();
 	ksu_ksud_init();"""
-    r_init = """#if defined(CONFIG_KSU_KPROBES_HOOK) || defined(CONFIG_KPROBES)
-	ksu_sucompat_init();
+    r_init = """	ksu_sucompat_init();
+#ifdef CONFIG_KSU_KPROBES_HOOK
 	ksu_ksud_init();"""
     if t_init in ksu_c:
         ksu_c = ksu_c.replace(t_init, r_init, 1)
@@ -435,12 +425,12 @@ if os.path.exists(ksu_c_path):
     t_exit = """#ifdef CONFIG_KSU_KPROBES_HOOK
 	ksu_ksud_exit();
 	ksu_sucompat_exit();"""
-    r_exit = """#if defined(CONFIG_KSU_KPROBES_HOOK) || defined(CONFIG_KPROBES)
-	ksu_ksud_exit();
-	ksu_sucompat_exit();"""
+    r_exit = """	ksu_sucompat_exit();
+#ifdef CONFIG_KSU_KPROBES_HOOK
+	ksu_ksud_exit();"""
     if t_exit in ksu_c:
         ksu_c = ksu_c.replace(t_exit, r_exit, 1)
 
     with open(ksu_c_path, 'w', encoding='utf-8') as f:
         f.write(ksu_c)
-    log('Patched drivers/kernelsu/ksu.c kprobe init and exit calls')
+    log('Patched drivers/kernelsu/ksu.c to initialize sucompat for manual hook mode')
