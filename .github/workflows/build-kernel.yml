@@ -1,4 +1,4 @@
-name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev2 - KernelSU-Next & SuSFS)
+name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev3 - KernelSU-Next & SuSFS)
 
 'on':
   workflow_dispatch:
@@ -30,7 +30,7 @@ name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev2 - KernelSU-Next & SuSFS
         description: 'Release Tag'
         required: false
         type: string
-        default: 'v1.0.0-Rev2'
+        default: 'v1.0.0-Rev3'
 
 permissions:
   contents: write
@@ -174,8 +174,11 @@ jobs:
           scripts/config --file out/.config -e CC_STACKPROTECTOR_NONE || true
           scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
 
+          # Relax strict module RWX for runtime hooking compatibility
+          scripts/config --file out/.config -d STRICT_MODULE_RWX || true
+
           # Configure Official Zareth Kernel Branding
-          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel Rev2" || true
+          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel Rev3" || true
           scripts/config --file out/.config -d LOCALVERSION_AUTO || true
 
           # Size Optimization: -Os ensures Image.gz-dtb stays compact (~14.5MB) fitting 32MB boot partition
@@ -323,7 +326,7 @@ jobs:
           # Fix AnyKernel3 device check and dynamic block detection
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
-          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 2 for Samsung A31\/A41/' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 3 for Samsung A31\/A41/' anykernel.sh
 
           # Fix Samsung recovery metadata & partition locking (strip #FLASHAFTERUPDATEV2 and metadata references)
           echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
@@ -343,13 +346,20 @@ jobs:
             echo "  chown 0:0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
             echo "  chcon u:object_r:ksud_exec:s0 /data/adb/ksud 2>/dev/null || chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
             echo "  rm -f /data/adb/ksud.sock /data/adb/ksu/ksud.sock 2>/dev/null" >> anykernel.sh
+            echo "  # Reset Zygisk Next crash lock to recover daemon" >> anykernel.sh
+            echo "  rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status 2>/dev/null" >> anykernel.sh
+            echo "  # Disable crashing zygisk_vector to prevent system_server bootloop" >> anykernel.sh
+            echo "  if [ -d /data/adb/modules/zygisk_vector ]; then" >> anykernel.sh
+            echo "    ui_print \"- Disabling zygisk_vector to prevent system_server crash loop...\"" >> anykernel.sh
+            echo "    touch /data/adb/modules/zygisk_vector/disable 2>/dev/null" >> anykernel.sh
+            echo "  fi" >> anykernel.sh
             echo "fi" >> anykernel.sh
           fi
 
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
           cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
 
-          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev2-Permissive-SuSFS.zip"
+          ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev3-Permissive-SuSFS.zip"
           zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
           echo "Created flashable zip: $ZIP_NAME"
 
@@ -406,26 +416,26 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: Samsung Galaxy A31 / A41 Revision 2 (Zareth Kernel Rev2)
+          name: Samsung Galaxy A31 / A41 Revision 3 (Zareth Kernel Rev3)
           body: |
-            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 2
+            ## 🚀 Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - Zareth Kernel Revision 3
 
             ### 📱 Kernel & Device Details
             - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
-            - **Kernel Name / Version:** `4.14.186 Zareth Kernel Rev2`
+            - **Kernel Name / Version:** `4.14.186 Zareth Kernel Rev3`
             - **Chipset:** MediaTek Helio P65 (`MT6768`)
             - **Root Engine:** KernelSU-Next v1.0.5 (with matching ksud v1.0.5 & on-demand throne tracker)
             - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level hooks, mount hiding, try_umount)
-            - **SELinux Mode:** Permissive (Maximum stability on OneUI 8 / Android 16 UN1CA ports & GSIs)
+            - **SELinux Mode:** Permissive (Maximum stability on OneUI 8 / Android 16 UN1CA ports, Stock ROMs & GSIs)
             - **Storage & Security:** Samsung SDP retained (`CONFIG_SDP=y`, `CONFIG_FSCRYPT_SDP=y`) for zero-bootloop `/data` mounting
 
-            ### 🛠️ Revision 2 Changelog & Fixes
-            - **Native Manual Inline Hooks (Zero KProbes):** Implemented native manual inline hooks in `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c`, and `drivers/input/input.c` following the proven Samsung MT6768 4.14 architecture. Completely eliminates Kprobe breakpoint exceptions and early bootloops.
-            - **Full Superuser & Module Functionality:** Verified working root grant in KernelSU Next Manager v1.0.5 and v1.0.4, native `ksud` auto-start via `atrace.rc` injection, working Zygisk Next daemon connection, and functional module actions.
-            - **Stock ROM SDP Compatibility:** Relaxed `atrace.rc` path matching for Samsung One UI 4.1 / Android 12 stock mounts.
-            - **Fixed Manual Superuser Granting:** Injected on-demand throne tracking in `core_hook.c` and relaxed filesystem magic check in `throne_tracker.c` for Android 16 SDP encryption.
-            - **Auto RSKU Cleanup in Recovery:** AnyKernel3 now automatically upgrades `/data/adb/ksud` to official v1.0.5 and purges stale RSKU daemon locks.
-            - **Fixed AnyKernel3 Recovery Locking:** Stripped `#FLASHAFTERUPDATEV2` and `/metadata` partition references for clean flashing across all recoveries.
+            ### 🛠️ Revision 3 Changelog & Fixes
+            - **Resolved Zygisk Next `❌ Could not connect to service!` & Bootloop:**
+              - Root Cause Identified: Leftover dirty modules (specifically `zygisk_vector` / Vector by JingMatrix) caused repeated `system_server` SIGSEGV crashes (`SEGV_ACCERR` fault at guard page `0x703bec2000` via Dobby inline hooking), triggering Android RescueParty bootloops and shutting down Zygisk Next daemon (`hook status: 3` / STOP_BY_CRASH).
+              - AnyKernel3 built-in auto-recovery: Automatically detects and disables `zygisk_vector` (`touch /data/adb/modules/zygisk_vector/disable`) and clears Zygisk Next crash lock (`rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status`) during flash, completely preventing bootloops when upgrading from RSKU or dirty setups.
+            - **Relaxed Module RWX Protections:** Disabled `CONFIG_STRICT_MODULE_RWX` (`# CONFIG_STRICT_MODULE_RWX is not set`) to allow flexible runtime memory hooking.
+            - **Zero KProbes Manual Inline Hooks:** Retained native manual hooks in `fs/exec.c`, `fs/read_write.c`, `fs/open.c`, `fs/stat.c`, and `drivers/input/input.c`.
+            - **Supersedes Revision 2 & Revision 1:** Rev1 and Rev2 are officially marked as outdated.
 
             ### ⚡ Mitrinket-Inspired Performance Optimizations
             - **Touch & Display Latency:** SchedTune + EAS energy governor `schedutil` for instant touch response
@@ -435,8 +445,8 @@ jobs:
             - **Storage I/O:** BFQ + MQ-Deadline schedulers for snappy app launch speeds
 
             ### 📦 Packages:
-            - `SM-A31-ZarethKernel-Rev2-Permissive-SuSFS.zip`
-            - `SM-A41-ZarethKernel-Rev2-Permissive-SuSFS.zip`
+            - `SM-A31-ZarethKernel-Rev3-Permissive-SuSFS.zip`
+            - `SM-A41-ZarethKernel-Rev3-Permissive-SuSFS.zip`
             - `KernelSU_Next_v1.0.5_12430-release.apk` (Recommended Manager v1.0.5)
             - `KernelSU_Next_v1.0.4_12335-release.apk` (Compatible Manager v1.0.4)
             - `APatch_11282_release.apk`
