@@ -330,3 +330,52 @@ if os.path.exists(compat_h):
             with open(compat_h, 'w', encoding='utf-8') as f:
                 f.write(c)
             log('Added KSYM_NAME_LEN fallback to kernel_compat.h')
+
+
+# 9. Patch drivers/kernelsu/core_hook.c for on-demand throne tracking (Fixes manual superuser grant in Manager v1.0.4)
+if os.path.exists('drivers/kernelsu/core_hook.c'):
+    with open('drivers/kernelsu/core_hook.c', 'r', encoding='utf-8') as f:
+        ch_code = f.read()
+
+    target_throne = "uid_t current_uid_val = current_uid().val;\n\tuid_t manager_uid = ksu_get_manager_uid();"
+    replacement_throne = """if (!ksu_is_manager_uid_valid()) {
+		track_throne();
+	}
+	uid_t current_uid_val = current_uid().val;
+	uid_t manager_uid = ksu_get_manager_uid();"""
+
+    if target_throne in ch_code:
+        ch_code = ch_code.replace(target_throne, replacement_throne, 1)
+        with open('drivers/kernelsu/core_hook.c', 'w', encoding='utf-8') as f:
+            f.write(ch_code)
+        log('Injected on-demand throne tracking into drivers/kernelsu/core_hook.c')
+    else:
+        log('Warning: target_throne not found in core_hook.c')
+
+# 10. Patch drivers/kernelsu/throne_tracker.c for Android 16 / OneUI 8 filesystem compatibility
+if os.path.exists('drivers/kernelsu/throne_tracker.c'):
+    with open('drivers/kernelsu/throne_tracker.c', 'r', encoding='utf-8') as f:
+        tt_code = f.read()
+
+    magic_check = """if (S_MAGIC_COMPAT(file) != data_app_magic) {
+					pr_info("%s: skip: %s magic: 0x%lx expected: 0x%lx\\n", __func__, pos->dirpath, 
+						S_MAGIC_COMPAT(file), data_app_magic);
+					filp_close(file, NULL);
+					goto skip_iterate;
+				}"""
+
+    magic_relaxed = """/* Relaxed magic check for Android 16 / OneUI 8 subdirectories */
+				if (false && S_MAGIC_COMPAT(file) != data_app_magic) {
+					pr_info("%s: skip: %s magic: 0x%lx expected: 0x%lx\\n", __func__, pos->dirpath, 
+						S_MAGIC_COMPAT(file), data_app_magic);
+					filp_close(file, NULL);
+					goto skip_iterate;
+				}"""
+
+    if magic_check in tt_code:
+        tt_code = tt_code.replace(magic_check, magic_relaxed, 1)
+        with open('drivers/kernelsu/throne_tracker.c', 'w', encoding='utf-8') as f:
+            f.write(tt_code)
+        log('Relaxed filesystem magic check in drivers/kernelsu/throne_tracker.c for Android 16')
+    else:
+        log('Note: magic_check block not found in throne_tracker.c')
