@@ -16,11 +16,11 @@ on:
         default: 'ksun_susfs'
         options: [ksun_susfs, ksun_nosusfs, vanilla]
       ksu_source:
-        description: 'KernelSU-Next source: intree = keep drivers/kernelsu from your repo (safe default), upstream = replace with the branch below'
+        description: 'KernelSU-Next source: upstream = clone the branch below (default), intree = use drivers/kernelsu or KernelSU-Next/ from your repo if present (falls back to upstream if not)'
         required: true
         type: choice
-        default: 'intree'
-        options: [intree, upstream]
+        default: 'upstream'
+        options: [upstream, intree]
       ksu_branch:
         description: 'KernelSU-Next branch (only used when ksu_source = upstream)'
         required: false
@@ -151,12 +151,14 @@ jobs:
           }
 
           integrate_ksu() {
+            if [ "$KSU_SOURCE" = "intree" ] && [ ! -f drivers/kernelsu/Kconfig ] && [ -f KernelSU-Next/kernel/Kconfig ]; then
+              ln -sfn ../KernelSU-Next/kernel drivers/kernelsu
+            fi
+            if [ "$KSU_SOURCE" = "intree" ] && [ ! -f drivers/kernelsu/Kconfig ]; then
+              echo "::warning::No in-tree KernelSU-Next found in the repo; falling back to upstream ($KSU_BRANCH)"
+              KSU_SOURCE=upstream
+            fi
             if [ "$KSU_SOURCE" = "intree" ]; then
-              # Keep the repo's own KernelSU-Next (includes your SDP/throne-tracker fixes)
-              if [ ! -f drivers/kernelsu/Kconfig ]; then
-                echo "::error::drivers/kernelsu not found in the repo. Use ksu_source=upstream or point me to where KernelSU-Next lives."
-                exit 1
-              fi
               KSU_INFO="in-tree@$(git rev-parse --short HEAD)"
               if [ "$VARIANT" = "ksun_susfs" ]; then
                 if ! grep -q 'config KSU_SUSFS$' drivers/kernelsu/Kconfig; then
