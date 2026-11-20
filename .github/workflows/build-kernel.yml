@@ -1,33 +1,47 @@
-name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev3 - KernelSU-Next & SuSFS)
+name: Build Samsung Galaxy A31 / A41 (Zareth Kernel - KernelSU-Next & SuSFS)
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       target_device:
-        description: 'Target Device to Build'
+        description: 'Target device'
         required: true
         type: choice
         default: 'all'
-        options:
-          - 'all'
-          - 'a31'
-          - 'a41'
+        options: [all, a31, a41]
       su_variant:
-        description: 'Root & SuSFS Variant'
+        description: 'Root & SuSFS variant'
         required: true
         type: choice
         default: 'ksun_susfs'
-        options:
-          - 'ksun_susfs'
-          - 'ksun_nosusfs'
-          - 'vanilla'
+        options: [ksun_susfs, ksun_nosusfs, vanilla]
+      ksu_branch:
+        description: 'KernelSU-Next branch (non-GKI/4.14). Use a pre-patched susfs branch if one exists for 4.14'
+        required: false
+        type: string
+        default: 'legacy'
+      ksu_ref:
+        description: 'KernelSU-Next tag/commit to pin (empty = branch HEAD)'
+        required: false
+        type: string
+        default: ''
+      susfs_branch:
+        description: 'susfs4ksu branch'
+        required: false
+        type: string
+        default: 'kernel-4.14'
+      susfs_ref:
+        description: 'susfs4ksu tag/commit to pin (empty = branch HEAD)'
+        required: false
+        type: string
+        default: ''
       make_release:
-        description: 'Create/Update GitHub Release on Success'
+        description: 'Create/Update GitHub Release on success'
         required: false
         type: boolean
         default: true
       release_tag:
-        description: 'Release Tag'
+        description: 'Release tag (include "Beta" for a pre-release)'
         required: false
         type: string
         default: 'v1.0.0-Rev3'
@@ -35,429 +49,346 @@ name: Build Samsung Galaxy A31 / A41 (Zareth Kernel Rev3 - KernelSU-Next & SuSFS
 permissions:
   contents: write
 
-jobs:
-  matrix_prep:
-    name: Setup Matrix
-    runs-on: ubuntu-latest
-    outputs:
-      devices: ${{ steps.set-matrix.outputs.devices }}
-    steps:
-      - id: set-matrix
-        run: |
-          if [ "${{ inputs.target_device }}" = "all" ]; then
-            echo 'devices=["a31", "a41"]' >> $GITHUB_OUTPUT
-          else
-            echo 'devices=["${{ inputs.target_device }}"]' >> $GITHUB_OUTPUT
-          fi
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: false
 
+env:
+  KBUILD_BUILD_USER: zareth
+  KBUILD_BUILD_HOST: github-actions
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: '1'
+  CCACHE_MAXSIZE: '2G'
+  CCACHE_SLOPPINESS: time_macros,include_file_mtime,file_macro
+
+jobs:
   build:
-    name: Build Samsung ${{ matrix.device }} (${{ inputs.su_variant }})
-    needs: matrix_prep
+    name: Build ${{ matrix.device }} (${{ inputs.su_variant }})
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        device: ${{ fromJson(needs.matrix_prep.outputs.devices) }}
+        # Replaces the separate matrix_prep job (saves a runner spin-up)
+        device: ${{ fromJson(inputs.target_device == 'all' && '["a31","a41"]' || format('["{0}"]', inputs.target_device)) }}
 
     env:
-      KSU_VERSION_OVERRIDE: 33355
-      KSU_VERSION_TAG_OVERRIDE: v3.4.2
-    steps:
-      - name: Free Runner Disk Space
-        run: |
-          echo "=== Freeing disk space ==="
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo docker image prune -a -f || true
-          df -h
+      DEVICE: ${{ matrix.device }}
+      VARIANT: ${{ inputs.su_variant }}
+      KSU_BRANCH: ${{ inputs.ksu_branch }}
+      KSU_REF: ${{ inputs.ksu_ref }}
+      SUSFS_BRANCH: ${{ inputs.susfs_branch }}
+      SUSFS_REF: ${{ inputs.susfs_ref }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
 
-      - name: Checkout Kernel Source
+    steps:
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install Build Dependencies
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev lz4 cpio kmod git curl \
-            zip unzip file python3 tar wget jq rsync xz-utils perl ccache \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi libncurses5-dev xxd
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev lz4 cpio \
+            zip unzip python3 xxd ccache binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
-      - name: Setup Swap Memory
+      # Toolchain: cached instead of re-cloned (~1GB) on every run
+      - name: Restore Proton Clang cache
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains/proton-clang
+          key: proton-clang-13-v1
+
+      - name: Download Proton Clang
+        if: steps.clang-cache.outputs.cache-hit != 'true'
         run: |
-          sudo swapoff -a || true
-          sudo fallocate -l 16G /mnt/swapfile || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=16384
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
+          mkdir -p ~/toolchains
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/toolchains/proton-clang
 
-      - name: Download Proton Clang 13
+      - name: Add toolchain to PATH
         run: |
-          echo "=== Cloning Proton Clang 13 ==="
-          mkdir -p $HOME/toolchains
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $HOME/toolchains/proton-clang
-          echo "$HOME/toolchains/proton-clang/bin" >> $GITHUB_PATH
-          $HOME/toolchains/proton-clang/bin/clang --version
-          $HOME/toolchains/proton-clang/bin/aarch64-linux-gnu-as --version
+          echo "$HOME/toolchains/proton-clang/bin" >> "$GITHUB_PATH"
+          "$HOME/toolchains/proton-clang/bin/clang" --version | head -n1
 
-      - name: Setup SuSFS & KernelSU-Next
+      # ccache makes re-builds of the same device/variant dramatically faster
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.device }}-${{ inputs.su_variant }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.device }}-${{ inputs.su_variant }}-
+            ccache-${{ matrix.device }}-
+
+      - name: Setup KernelSU-Next & SuSFS
+        id: root
         run: |
-          DEVICE="${{ matrix.device }}"
-          VARIANT="${{ inputs.su_variant }}"
-          echo "=== Setting up Root Variant: $VARIANT for $DEVICE ==="
+          set -euo pipefail
+          KSU_INFO="none"; SUSFS_INFO="none"; KSU_VER=""
 
-          if [ "$VARIANT" = "ksun_susfs" ]; then
-            echo "--- Integrating SuSFS 4.14 patches ---"
-            git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+          clone_pinned() { # url branch ref dest
+            git clone --filter=blob:none -b "$2" "$1" "$4"
+            [ -n "$3" ] && git -C "$4" checkout "$3"
+          }
+
+          integrate_ksu() {
+            clone_pinned https://github.com/KernelSU-Next/KernelSU-Next.git "$KSU_BRANCH" "$KSU_REF" /tmp/KernelSU-Next
+            KSU_SHA=$(git -C /tmp/KernelSU-Next rev-parse --short HEAD)
+            KSU_COUNT=$(git -C /tmp/KernelSU-Next rev-list --count HEAD)
+            KSU_TAG=$(git -C /tmp/KernelSU-Next describe --tags --abbrev=0 2>/dev/null || echo "$KSU_BRANCH")
+            KSU_INFO="$KSU_TAG@$KSU_SHA"
+
+            rm -rf drivers/kernelsu
+            cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
+            if [ -d /tmp/KernelSU-Next/uapi ]; then
+              rm -rf drivers/kernelsu/include/uapi
+              cp -r /tmp/KernelSU-Next/uapi drivers/kernelsu/include/uapi
+            fi
+            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+            # NOTE: formula assumed from KernelSU-Next's Makefile (10000 + 200 + commit count).
+            # Verify against drivers/kernelsu/Makefile if the manager shows a wrong version.
+            echo "KSU_VERSION_OVERRIDE=$((10200 + KSU_COUNT))" >> "$GITHUB_ENV"
+            echo "KSU_VERSION_TAG_OVERRIDE=$KSU_TAG" >> "$GITHUB_ENV"
+
+            [ -f scripts/patch_ksu_414.py ] || { echo "::error::scripts/patch_ksu_414.py missing"; exit 1; }
+            python3 scripts/patch_ksu_414.py
+          }
+
+          integrate_susfs() {
+            clone_pinned https://gitlab.com/simonpunk/susfs4ksu.git "$SUSFS_BRANCH" "$SUSFS_REF" /tmp/susfs4ksu
+            SUSFS_VER=$(grep -oP '#define SUSFS_VERSION "\K[^"]+' /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h || echo unknown)
+            SUSFS_INFO="$SUSFS_VER@$(git -C /tmp/susfs4ksu rev-parse --short HEAD)"
+
             cp -vf /tmp/susfs4ksu/kernel_patches/fs/* fs/
             cp -vf /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
-            sed -i 's/#define SUSFS_VERSION .*/#define SUSFS_VERSION "v2.2.0"/' include/linux/susfs.h
-            patch -p1 --fuzz=3 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
 
-            echo "--- Integrating KernelSU-Next (Legacy Branch) ---"
-            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
+            # Strict apply: a half-applied SuSFS patch produces a kernel that boots but misbehaves.
+            if ! patch -p1 --no-backup-if-mismatch -F3 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch; then
+              echo "::error::SuSFS kernel patch has rejects:"
+              find . -name '*.rej' -print -exec cat {} \;
+              exit 1
+            fi
+          }
 
-            rm -rf drivers/kernelsu
-            cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
-            rm -rf drivers/kernelsu/include/uapi
-            cp -r /tmp/KernelSU-Next/uapi drivers/kernelsu/include/uapi
+          case "$VARIANT" in
+            ksun_susfs)   integrate_susfs; integrate_ksu ;;
+            ksun_nosusfs) integrate_ksu ;;
+            vanilla)      echo "Vanilla: no root injection" ;;
+          esac
 
-            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          echo "ksu=$KSU_INFO"     >> "$GITHUB_OUTPUT"
+          echo "susfs=$SUSFS_INFO" >> "$GITHUB_OUTPUT"
+          echo "KernelSU-Next: $KSU_INFO | SuSFS: $SUSFS_INFO"
 
-            # Patch for Linux 4.14 & legacy branch layout
-            python3 scripts/patch_ksu_414.py
-
-          elif [ "$VARIANT" = "ksun_nosusfs" ]; then
-            echo "--- Integrating KernelSU-Next (Legacy without SuSFS) ---"
-            git clone --depth=1 -b legacy https://github.com/KernelSU-Next/KernelSU-Next.git /tmp/KernelSU-Next
-
-            rm -rf drivers/kernelsu
-            cp -r /tmp/KernelSU-Next/kernel drivers/kernelsu
-            rm -rf drivers/kernelsu/include/uapi
-            cp -r /tmp/KernelSU-Next/uapi drivers/kernelsu/include/uapi
-
-            grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            python3 scripts/patch_ksu_414.py
-          else
-            echo "--- Vanilla mode selected: skipping root injection ---"
-          fi
-
-      - name: Configure Kernel Defconfig
+      - name: Configure kernel
         run: |
-          DEVICE="${{ matrix.device }}"
-          VARIANT="${{ inputs.su_variant }}"
+          set -euo pipefail
           DEFCONFIG="${DEVICE}_defconfig"
+          [ -f "arch/arm64/configs/$DEFCONFIG" ] || { echo "::error::$DEFCONFIG not found"; exit 1; }
 
-          echo "Target defconfig: $DEFCONFIG"
-          if [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
-            echo "::error::Defconfig arch/arm64/configs/$DEFCONFIG not found!"
-            exit 1
+          MK=(make O=out ARCH=arm64 CC="ccache clang" CLANG_TRIPLE=aarch64-linux-gnu-
+              CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-)
+          "${MK[@]}" "$DEFCONFIG"
+
+          cfg() { scripts/config --file out/.config "$@"; }
+          en()  { for s in "$@"; do cfg -e "$s"; done; }
+          dis() { for s in "$@"; do cfg -d "$s"; done; }
+
+          # Knox / integrity tripwires
+          dis UH RUSTUH_RKP RUSTUH_KDP RKP RKP_KDP RKP_CFP DEFEX SECURITY_DEFEX TIMA INTEGRITY \
+              KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG \
+              STRICT_MODULE_RWX LOCALVERSION_AUTO
+          en  LTO_NONE CC_STACKPROTECTOR_NONE SECURITY_SELINUX_DEVELOP ALWAYS_PERMISSIVE
+
+          cfg --set-str LOCALVERSION " Zareth Kernel ${RELEASE_TAG}"
+
+          # Size optimization
+          dis CC_OPTIMIZE_FOR_PERFORMANCE DEBUG_INFO PAGE_OWNER SLUB_DEBUG
+          en  CC_OPTIMIZE_FOR_SIZE STRIP_ASM_SYMS
+
+          # Samsung SDP / FBE
+          en SDP FSCRYPT_SDP FS_ENCRYPTION_INLINE_CRYPT
+
+          # RAM / CPU / net / power / IO
+          en  ZRAM ZRAM_WRITEBACK ZSMALLOC CRYPTO_LZ4 CRYPTO_ZSTD PROCESS_RECLAIM VMPRESSURE
+          dis ZSMALLOC_STAT
+          en  SCHED_TUNE CPU_FREQ_GOV_SCHEDUTIL CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+          en  TCP_CONG_ADVANCED TCP_CONG_BBR
+          cfg --set-str DEFAULT_TCP_CONG bbr
+          en  PM_AUTOSLEEP PM_WAKELOCKS WQ_POWER_EFFICIENT_DEFAULT CPU_IDLE CPU_IDLE_GOV_MENU
+          en  MQ_IOSCHED_DEADLINE MQ_IOSCHED_KYBER IOSCHED_BFQ IOSCHED_DEADLINE
+
+          if [ "$VARIANT" != "vanilla" ]; then
+            # Manual hooks, no kprobes
+            en  KSU KSU_MANUAL_HOOK HAVE_KPROBES OVERLAY_FS
+            dis KPROBES KPROBE_EVENTS KSU_KPROBES_HOOK KSU_SYSCALL_TABLE_HOOK KSU_ALLOWLIST_WORKAROUND
           fi
-
-          make O=out ARCH=arm64 CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
-
-          # Strip Knox and security tripwires that break custom kernels
-          for c in UH RUSTUH_RKP RUSTUH_KDP RKP RKP_KDP RKP_CFP DEFEX SECURITY_DEFEX TIMA INTEGRITY KNOX_KAP SECURITY_SELINUX_ALWAYS_ENFORCE LTO LTO_CLANG CC_STACKPROTECTOR_STRONG; do
-            scripts/config --file out/.config -d $c || true
-          done
-          scripts/config --file out/.config -e LTO_NONE || true
-          scripts/config --file out/.config -e CC_STACKPROTECTOR_NONE || true
-          scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
-
-          # Relax strict module RWX for runtime hooking compatibility
-          scripts/config --file out/.config -d STRICT_MODULE_RWX || true
-
-          # Configure Official Zareth Kernel Branding
-          scripts/config --file out/.config --set-str LOCALVERSION " Zareth Kernel Rev3" || true
-          scripts/config --file out/.config -d LOCALVERSION_AUTO || true
-
-          # Size Optimization: -Os ensures Image.gz-dtb stays compact (~14.5MB) fitting 32MB boot partition
-          scripts/config --file out/.config -d CC_OPTIMIZE_FOR_PERFORMANCE || true
-          scripts/config --file out/.config -e CC_OPTIMIZE_FOR_SIZE || true
-          scripts/config --file out/.config -d DEBUG_INFO || true
-          scripts/config --file out/.config -d PAGE_OWNER || true
-          scripts/config --file out/.config -d SLUB_DEBUG || true
-          scripts/config --file out/.config -e STRIP_ASM_SYMS || true
-
-          # KernelSU-Next Legacy Manual Hook Configuration (Zero KProbes)
-          scripts/config --file out/.config -e KSU || true
-          scripts/config --file out/.config -e KSU_MANUAL_HOOK || true
-          scripts/config --file out/.config -d KSU_KPROBES_HOOK || true
-          scripts/config --file out/.config -d KSU_SYSCALL_TABLE_HOOK || true
-
-          # Samsung SDP Data Encryption for OneUI 8 (UN1CA) & Stock
-          scripts/config --file out/.config -e SDP || true
-          scripts/config --file out/.config -e FSCRYPT_SDP || true
-          scripts/config --file out/.config -e FS_ENCRYPTION_INLINE_CRYPT || true
-
-          # SELinux Permissive (Essential for GSI & OneUI 8 Port Stability)
-          scripts/config --file out/.config -e ALWAYS_PERMISSIVE || true
-          scripts/config --file out/.config -d SECURITY_SELINUX_ALWAYS_ENFORCE || true
-          scripts/config --file out/.config -e SECURITY_SELINUX_DEVELOP || true
-
-          # === Mitrinket Safe Performance & Hardware Optimizations ===
-          echo "--- Applying Mitrinket Hardware Optimizations (RAM, CPU, Touch, Battery, Deep Sleep) ---"
-
-          # 1. RAM Optimization & Memory Reclaim
-          scripts/config --file out/.config -e ZRAM || true
-          scripts/config --file out/.config -e ZRAM_WRITEBACK || true
-          scripts/config --file out/.config -e ZSMALLOC || true
-          scripts/config --file out/.config -d ZSMALLOC_STAT || true
-          scripts/config --file out/.config -e CRYPTO_LZ4 || true
-          scripts/config --file out/.config -e CRYPTO_ZSTD || true
-          scripts/config --file out/.config -e PROCESS_RECLAIM || true
-          scripts/config --file out/.config -e VMPRESSURE || true
-
-          # 2. CPU & Touch Responsiveness (SchedTune & Schedutil)
-          scripts/config --file out/.config -e SCHED_TUNE || true
-          scripts/config --file out/.config -e CPU_FREQ_GOV_SCHEDUTIL || true
-          scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_SCHEDUTIL || true
-
-          # 3. Google BBR TCP Congestion Control (Low latency, smoother Wi-Fi / LTE)
-          scripts/config --file out/.config -e TCP_CONG_ADVANCED || true
-          scripts/config --file out/.config -e TCP_CONG_BBR || true
-          scripts/config --file out/.config --set-str DEFAULT_TCP_CONG "bbr" || true
-
-          # 4. Instant Deep Sleep & Battery Life (Pin khỏe)
-          scripts/config --file out/.config -e PM_AUTOSLEEP || true
-          scripts/config --file out/.config -e PM_WAKELOCKS || true
-          scripts/config --file out/.config -e WQ_POWER_EFFICIENT_DEFAULT || true
-          scripts/config --file out/.config -e CPU_IDLE || true
-          scripts/config --file out/.config -e CPU_IDLE_GOV_MENU || true
-
-          # 5. Storage / SSD / Flash Fast I/O Schedulers
-          scripts/config --file out/.config -e MQ_IOSCHED_DEADLINE || true
-          scripts/config --file out/.config -e MQ_IOSCHED_KYBER || true
-          scripts/config --file out/.config -e IOSCHED_BFQ || true
-          scripts/config --file out/.config -e IOSCHED_DEADLINE || true
-
           if [ "$VARIANT" = "ksun_susfs" ]; then
-            # Enable KSU with Manual Hooks (No KProbes on MT6768 4.14)
-            scripts/config --file out/.config \
-              -e KSU \
-              -d KPROBES \
-              -e HAVE_KPROBES \
-              -d KPROBE_EVENTS \
-              -d KSU_KPROBES_HOOK \
-              -d KSU_ALLOWLIST_WORKAROUND \
-              -e OVERLAY_FS
-
-            # Enable SuSFS
-            scripts/config --file out/.config -e KSU_SUSFS \
-              -e KSU_SUSFS_SUS_PATH \
-              -e KSU_SUSFS_SUS_MOUNT \
-              -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-              -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-              -e KSU_SUSFS_SUS_KSTAT \
-              -e KSU_SUSFS_TRY_UMOUNT \
-              -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
-              -e KSU_SUSFS_SPOOF_UNAME \
-              -e KSU_SUSFS_ENABLE_LOG \
-              -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-              -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-              -e KSU_SUSFS_OPEN_REDIRECT \
-              -d KSU_SUSFS_SUS_SU || true
-
-          elif [ "$VARIANT" = "ksun_nosusfs" ]; then
-            scripts/config --file out/.config \
-              -e KSU \
-              -d KPROBES \
-              -e HAVE_KPROBES \
-              -d KPROBE_EVENTS \
-              -d KSU_KPROBES_HOOK \
-              -d KSU_ALLOWLIST_WORKAROUND \
-              -e OVERLAY_FS
+            en KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
+               KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+               KSU_SUSFS_SUS_KSTAT KSU_SUSFS_TRY_UMOUNT KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+               KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+               KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG KSU_SUSFS_OPEN_REDIRECT
+            dis KSU_SUSFS_SUS_SU
           fi
 
-          # Apply olddefconfig non-interactively
-          make O=out ARCH=arm64 CC=clang \
+          "${MK[@]}" olddefconfig
+
+          # olddefconfig silently drops symbols with unmet deps: fail loudly instead
+          need() { grep -q "^CONFIG_$1=y" out/.config || { echo "::error::CONFIG_$1 not set after olddefconfig"; exit 1; }; }
+          if [ "$VARIANT" != "vanilla" ]; then need KSU; fi
+          if [ "$VARIANT" = "ksun_susfs" ]; then need KSU_SUSFS; fi
+          grep -E "CONFIG_LOCALVERSION=|CONFIG_KSU|CONFIG_SDP|CONFIG_ALWAYS_PERMISSIVE|CONFIG_TCP_CONG_BBR=|CONFIG_KPROBES" out/.config || true
+
+      - name: Compile kernel
+        run: |
+          set -euo pipefail
+          ccache -z
+          make -j"$(nproc)" O=out ARCH=arm64 CC="ccache clang" \
             CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS="-w" \
+            Image.gz dtbs 2>&1 | tee build.log
+          [ -f out/arch/arm64/boot/Image.gz ] || { echo "::error::Image.gz missing"; exit 1; }
+          ccache -s
 
-          echo "=== Verified Config Settings ==="
-          grep -E "CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_SUSFS|CONFIG_SDP|CONFIG_FSCRYPT_SDP|CONFIG_ALWAYS_PERMISSIVE|CONFIG_TCP_CONG_BBR|CONFIG_PM_AUTOSLEEP|CONFIG_KPROBE" out/.config || true
-
-      - name: Compile Kernel
-        shell: bash
+      - name: Append DTB
         run: |
-          echo "=== Starting Kernel Compilation with Proton Clang ==="
-          make -j$(nproc) O=out ARCH=arm64 CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            KCFLAGS="-w" Image.gz dtbs 2>&1 | tee build.log
-
-          if [ ! -f "out/arch/arm64/boot/Image.gz" ]; then
-            echo "::error::Image.gz build failed!"
-            exit 1
+          set -euo pipefail
+          B=out/arch/arm64/boot
+          DTB="$B/dts/mediatek/mt6768.dtb"
+          if [ -f "$DTB" ]; then
+            cat "$B/Image.gz" "$DTB" > "$B/Image.gz-dtb"
+          else
+            echo "::warning::mt6768.dtb not found, using plain Image.gz"
+            cp "$B/Image.gz" "$B/Image.gz-dtb"
           fi
+          ls -lh "$B"/Image*
 
-      - name: Append Device Tree Blob
-        run: |
-          echo "=== Preparing Image.gz-dtb ==="
-          DTB_PATH="out/arch/arm64/boot/dts/mediatek/mt6768.dtb"
-          if [ -f "$DTB_PATH" ] && [ -f "out/arch/arm64/boot/Image.gz" ]; then
-            cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > out/arch/arm64/boot/Image.gz-dtb
-            echo "Successfully appended mt6768.dtb to Image.gz."
-          elif [ -f "out/arch/arm64/boot/Image.gz" ]; then
-            cp out/arch/arm64/boot/Image.gz out/arch/arm64/boot/Image.gz-dtb
-            echo "Copied Image.gz as Image.gz-dtb."
-          fi
-          ls -lh out/arch/arm64/boot/
-
-      - name: Package with AnyKernel3
+      - name: Package (AnyKernel3)
         id: package
         run: |
-          DEVICE="${{ matrix.device }}"
-          UPPER_DEV=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
-          BUILD_DATE=$(date "+%Y%m%d-%H%M")
-          mkdir -p $GITHUB_WORKSPACE/staging
-          cd $GITHUB_WORKSPACE/staging
+          set -euo pipefail
+          UPPER=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]')
+          SAFE_TAG=$(echo "$RELEASE_TAG" | tr -c 'A-Za-z0-9._-' '_')
+          ZIP_NAME="SM-${UPPER}-ZarethKernel-${SAFE_TAG}-${VARIANT}.zip"
 
-          echo "Cloning AnyKernel3 template..."
+          mkdir -p staging && cd staging
           git clone --depth=1 https://github.com/Edhic1/AnyKernel3.git -b Samsung_A31 anykernel
           cd anykernel
           rm -rf .git README.md
 
-          # Fix AnyKernel3 device check and dynamic block detection
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh
           sed -i 's|BLOCK=/dev/block/by-name/boot;|BLOCK=boot;|' anykernel.sh
-          if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
-            sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Beta (KSU Next v3.4.2) for Samsung A31\/A41/' anykernel.sh
-          else
-            sed -i 's/kernel.string=.*/kernel.string=Zareth Kernel Revision 3 for Samsung A31\/A41/' anykernel.sh
-          fi
+          sed -i "s|kernel.string=.*|kernel.string=Zareth Kernel ${RELEASE_TAG} (${VARIANT}) for Samsung A31/A41|" anykernel.sh
 
-          # Fix Samsung recovery metadata & partition locking (strip #FLASHAFTERUPDATEV2 and metadata references)
+          # Samsung recovery metadata / partition locking workaround
           echo "# Dummy file; update-binary is a shell script." > META-INF/com/google/android/updater-script
           sed -i 's|for mount in /cache /data /metadata /persist; do|for mount in /cache; do|' META-INF/com/google/android/update-binary
           sed -i 's|/metadata||g' META-INF/com/google/android/update-binary
 
-          # Bundle official ksud v1.0.5 binary and auto-update /data/adb/ksud on flash
-          if [ -f /tmp/ksud ]; then
-            cp -vf /tmp/ksud ./ksud
-            echo "" >> anykernel.sh
-            echo "# Auto-update /data/adb/ksud with official v1.0.5 and clean up stale RSKU state" >> anykernel.sh
-            echo "mount /data 2>/dev/null" >> anykernel.sh
-            echo "if [ -d /data/adb ]; then" >> anykernel.sh
-            echo "  ui_print \"- Updating /data/adb/ksud to official v1.0.5...\"" >> anykernel.sh
-            echo "  cp -f \$home/ksud /data/adb/ksud 2>/dev/null" >> anykernel.sh
-            echo "  chmod 755 /data/adb/ksud 2>/dev/null" >> anykernel.sh
-            echo "  chown 0:0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
-            echo "  chcon u:object_r:ksud_exec:s0 /data/adb/ksud 2>/dev/null || chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null" >> anykernel.sh
-            echo "  rm -f /data/adb/ksud.sock /data/adb/ksu/ksud.sock 2>/dev/null" >> anykernel.sh
-            echo "  # Reset Zygisk Next crash lock to recover daemon" >> anykernel.sh
-            echo "  rm -f /data/adb/zygisksu/.abort_msg /data/adb/zygisksu/hook_status 2>/dev/null" >> anykernel.sh
-            echo "  # Disable crashing zygisk_vector to prevent system_server bootloop" >> anykernel.sh
-            echo "  if [ -d /data/adb/modules/zygisk_vector ]; then" >> anykernel.sh
-            echo "    ui_print \"- Disabling zygisk_vector to prevent system_server crash loop...\"" >> anykernel.sh
-            echo "    touch /data/adb/modules/zygisk_vector/disable 2>/dev/null" >> anykernel.sh
-            echo "  fi" >> anykernel.sh
-            echo "fi" >> anykernel.sh
-          fi
+          cp "$GITHUB_WORKSPACE"/out/arch/arm64/boot/Image.gz-dtb .
+          zip -r9 -q "../$ZIP_NAME" . -x '*placeholder'
+          cd ..
+          sha256sum "$ZIP_NAME" > "sha256-${DEVICE}.txt"   # per-device name: no clobbering in the release job
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          ls -lh
 
-          cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz-dtb .
-          cp -v $GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz .
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-${{ matrix.device }}
+          path: |
+            staging/*.zip
+            staging/sha256-*.txt
+          if-no-files-found: error
 
-          if [[ "${{ inputs.release_tag }}" == *"Beta"* ]] || [[ "${{ inputs.release_tag }}" == *"3.4.2"* ]]; then
-            ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip"
-          else
-            ZIP_NAME="SM-${UPPER_DEV}-ZarethKernel-Rev3-Permissive-SuSFS.zip"
-          fi
-          zip -r9 "$GITHUB_WORKSPACE/staging/$ZIP_NAME" * -x *placeholder
-          echo "Created flashable zip: $ZIP_NAME"
-
-          cd $GITHUB_WORKSPACE/staging
-
-          # Download official KernelSU-Next Manager APKs for v3.4.2
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2_33355-release.apk"
-          curl -LSs https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/KernelSU_Next_v3.4.2-spoofed_33355-release.apk -o "$GITHUB_WORKSPACE/staging/KernelSU_Next_v3.4.2-spoofed_33355-release.apk" || true
-          curl -LSs https://github.com/bmax121/APatch/releases/download/11282/APatch_11282_e8e4651_HEAD-release-signed.apk -o "$GITHUB_WORKSPACE/staging/APatch_11282_release.apk" || true
-
-          # Generate sha256 checksums
-          sha256sum *.zip *.apk > sha256sums.txt
-
-          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
-          ls -lh $GITHUB_WORKSPACE/staging/
-
-      - name: Upload Artifacts
+      - name: Upload debug files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Samsung-${{ matrix.device }}-Kernel-${{ github.run_number }}
+          name: debug-${{ matrix.device }}
           path: |
-            staging/*.zip
-            staging/*.apk
-            staging/sha256sums.txt
-            out/arch/arm64/boot/Image*
             out/.config
             build.log
-          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Save build info
+        run: |
+          printf 'ksu=%s\nsusfs=%s\n' "${{ steps.root.outputs.ksu }}" "${{ steps.root.outputs.susfs }}" > build-info-${DEVICE}.env
+      - uses: actions/upload-artifact@v4
+        with:
+          name: info-${{ matrix.device }}
+          path: build-info-*.env
 
   release:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    if: inputs.make_release == true && needs.build.result == 'success'
     permissions:
       contents: write
-    if: inputs.make_release == true && success()
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      VARIANT: ${{ inputs.su_variant }}
     steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: all_artifacts
+          path: all
+          pattern: '{zip,info}-*'
           merge-multiple: true
 
-      - name: Prepare Release Assets & Notes
+      - name: Prepare assets & notes
+        id: notes
         run: |
-          mkdir -p release_assets
-          find all_artifacts -type f \( -name "*.zip" -o -name "*.apk" -o -name "*.txt" \) -exec cp -v {} release_assets/ \;
-          cd release_assets
-          ls -lh
-          cat << 'END_NOTES' > release_notes.md
-          ## 🧪 [BETA] Samsung Galaxy A31 (SM-A315F) & A41 (SM-A415F) - KernelSU-Next v3.4.2 Build
+          set -euo pipefail
+          mkdir release_assets
+          cp all/*.zip release_assets/
+          cat all/sha256-*.txt > release_assets/sha256sums.txt
 
-          > [!WARNING]
-          > **BETA RELEASE (Experimental):** This is a dedicated test build evaluating the upgraded **KernelSU-Next v3.4.2** (Protocol: `33355`) and official `ksud` v3.4.2 64-bit ELF binary. The latest stable release remains **v1.0.0-Rev3**.
+          # Always ship the *current* official manager APKs instead of hardcoded URLs
+          if [ "$VARIANT" != "vanilla" ]; then
+            gh release download --repo KernelSU-Next/KernelSU-Next --pattern '*.apk' --dir release_assets \
+              || echo "::warning::Could not fetch manager APKs"
+            (cd release_assets && sha256sum *.apk >> sha256sums.txt 2>/dev/null || true)
+          fi
 
-          ### 📱 Kernel & Device Details
-          - **Device Support:** Samsung Galaxy A31 (`SM-A315F`) & Samsung Galaxy A41 (`SM-A415F`)
-          - **Kernel Name:** `4.14.186 Zareth Kernel Beta (KSUN v3.4.2)`
-          - **Chipset:** MediaTek Helio P65 (`MT6768`)
-          - **Root Engine:** KernelSU-Next **v3.4.2** (Protocol `33355`) + embedded official `ksud` v3.4.2 ELF
-          - **Stealth & Anti-Detection:** SuSFS v2.2.0 (kernel-level inline hooks, mount hiding, try_umount)
-          - **SELinux Mode:** Permissive
-          - **Hook Mode:** Zero KProbes Manual Inline Hooks (100% stability, no kernel crash loops)
+          source <(cat all/build-info-*.env | sort -u | head -n2)
+          [[ "$RELEASE_TAG" =~ [Bb]eta|rc ]] && echo "pre=true" >> "$GITHUB_OUTPUT" || echo "pre=false" >> "$GITHUB_OUTPUT"
 
-          ### 📦 Included Files
-          - `SM-A31-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip` - Flashable zip for Galaxy A31
-          - `SM-A41-ZarethKernel-Beta-KSUN342-Permissive-SuSFS.zip` - Flashable zip for Galaxy A41
-          - `KernelSU_Next_v3.4.2_33355-release.apk` - Official Manager APK
-          - `KernelSU_Next_v3.4.2-spoofed_33355-release.apk` - Official Spoofed Manager APK
-          - `sha256sums.txt` - SHA256 integrity checksums
+          {
+            echo "## Zareth Kernel ${RELEASE_TAG} - Samsung Galaxy A31 (SM-A315F) / A41 (SM-A415F)"
+            echo
+            echo "- **Chipset:** MediaTek Helio P65 (MT6768), Linux 4.14"
+            echo "- **Variant:** \`${VARIANT}\`"
+            echo "- **KernelSU-Next:** \`${ksu}\`"
+            echo "- **SuSFS:** \`${susfs}\`"
+            echo "- **SELinux:** permissive | **Hooks:** manual inline (no kprobes)"
+            echo
+            echo "### Files"
+            (cd release_assets && ls -1 *.zip *.apk 2>/dev/null | sed 's/^/- `/; s/$/`/')
+            echo
+            echo "### Flashing"
+            echo "1. Flash the zip for your device in TWRP / OrangeFox or a kernel flasher."
+            echo "2. Reboot, then install/upgrade the KernelSU-Next manager APK."
+            echo "3. Verify with \`sha256sums.txt\`."
+          } > release_assets/release_notes.md
 
-          ### 💡 Flashing & Usage Instructions
-          1. Flash the flashable zip via TWRP / OrangeFox recovery or Kernel Flasher.
-          2. The installer will automatically update `/data/adb/ksud` to v3.4.2 and reset lockfiles.
-          3. Reboot to system.
-          4. Install or upgrade to `KernelSU_Next_v3.4.2_33355-release.apk`.
-          END_NOTES
-          sed -i 's/^          //' release_notes.md
-
-      - name: Create / Update GitHub Release
-        continue-on-error: true
+      - name: Create / update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
-          name: ${{ contains(inputs.release_tag, 'Beta') && '[BETA] Samsung Galaxy A31 / A41 (KernelSU-Next v3.4.2 Test)' || 'Samsung Galaxy A31 / A41 Revision 3 (Zareth Kernel Rev3)' }}
-          prerelease: ${{ contains(inputs.release_tag, 'Beta') }}
+          name: Samsung Galaxy A31 / A41 - Zareth Kernel ${{ inputs.release_tag }}
+          prerelease: ${{ steps.notes.outputs.pre }}
           body_path: release_assets/release_notes.md
           files: |
             release_assets/*.zip
             release_assets/*.apk
-            release_assets/*.txt
+            release_assets/sha256sums.txt
