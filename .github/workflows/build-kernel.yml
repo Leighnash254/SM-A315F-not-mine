@@ -15,8 +15,14 @@ on:
         type: choice
         default: 'ksun_susfs'
         options: [ksun_susfs, ksun_nosusfs, vanilla]
+      ksu_source:
+        description: 'KernelSU-Next source: intree = keep drivers/kernelsu from your repo (safe default), upstream = replace with the branch below'
+        required: true
+        type: choice
+        default: 'intree'
+        options: [intree, upstream]
       ksu_branch:
-        description: 'KernelSU-Next branch (non-GKI/4.14). Use a pre-patched susfs branch if one exists for 4.14'
+        description: 'KernelSU-Next branch (only used when ksu_source = upstream)'
         required: false
         type: string
         default: 'legacy'
@@ -81,6 +87,7 @@ jobs:
     env:
       DEVICE: ${{ matrix.device }}
       VARIANT: ${{ inputs.su_variant }}
+      KSU_SOURCE: ${{ inputs.ksu_source }}
       KSU_BRANCH: ${{ inputs.ksu_branch }}
       KSU_REF: ${{ inputs.ksu_ref }}
       SUSFS_REPO: ${{ inputs.susfs_repo }}
@@ -144,6 +151,32 @@ jobs:
           }
 
           integrate_ksu() {
+            if [ "$KSU_SOURCE" = "intree" ]; then
+              # Keep the repo's own KernelSU-Next (includes your SDP/throne-tracker fixes)
+              if [ ! -f drivers/kernelsu/Kconfig ]; then
+                echo "::error::drivers/kernelsu not found in the repo. Use ksu_source=upstream or point me to where KernelSU-Next lives."
+                exit 1
+              fi
+              KSU_INFO="in-tree@$(git rev-parse --short HEAD)"
+              if [ "$VARIANT" = "ksun_susfs" ]; then
+                if ! grep -q 'config KSU_SUSFS$' drivers/kernelsu/Kconfig; then
+                  P=/tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+                  echo "In-tree KSU has no KSU_SUSFS option; trying $P"
+                  if patch -p2 -d drivers/kernelsu --dry-run < "$P" > /tmp/ksu_susfs_dry.log 2>&1; then
+                    patch -p2 -d drivers/kernelsu --no-backup-if-mismatch < "$P"
+                  else
+                    cat /tmp/ksu_susfs_dry.log
+                    echo "::error::SuSFS KernelSU patch does not apply to the in-tree KernelSU-Next"
+                    exit 1
+                  fi
+                fi
+                grep -n 'KSU_SUSFS' drivers/kernelsu/Kconfig | head -n 20
+              fi
+              grep -q "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+              grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+              return 0
+            fi
+
             clone_pinned https://github.com/KernelSU-Next/KernelSU-Next.git "$KSU_BRANCH" "$KSU_REF" /tmp/KernelSU-Next
             KSU_SHA=$(git -C /tmp/KernelSU-Next rev-parse --short HEAD)
             KSU_COUNT=$(git -C /tmp/KernelSU-Next rev-list --count HEAD)
@@ -163,6 +196,26 @@ jobs:
             # Verify against drivers/kernelsu/Makefile if the manager shows a wrong version.
             echo "KSU_VERSION_OVERRIDE=$((10200 + KSU_COUNT))" >> "$GITHUB_ENV"
             echo "KSU_VERSION_TAG_OVERRIDE=$KSU_TAG" >> "$GITHUB_ENV"
+
+            # GITHUB_ENV only reaches *later* steps, so export for the script below too
+            export KSU_VERSION_OVERRIDE=$((10200 + KSU_COUNT)) KSU_VERSION_TAG_OVERRIDE="$KSU_TAG"
+
+            if [ "$VARIANT" = "ksun_susfs" ]; then
+              if ! grep -q 'config KSU_SUSFS$' drivers/kernelsu/Kconfig; then
+                P=/tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+                echo "KSU Kconfig has no KSU_SUSFS option; applying $P"
+                if patch -p2 -d drivers/kernelsu --dry-run < "$P" > /tmp/ksu_susfs_dry.log 2>&1; then
+                  patch -p2 -d drivers/kernelsu --no-backup-if-mismatch < "$P"
+                else
+                  cat /tmp/ksu_susfs_dry.log
+                  echo "::error::SuSFS KernelSU patch does not apply to KernelSU-Next $KSU_BRANCH"
+                  exit 1
+                fi
+              fi
+              echo "--- SuSFS symbols in drivers/kernelsu/Kconfig ---"
+              grep -n 'KSU_SUSFS' drivers/kernelsu/Kconfig | head -n 20 \
+                || { echo "::error::KSU_SUSFS still missing from Kconfig"; exit 1; }
+            fi
 
             [ -f scripts/patch_ksu_414.py ] || { echo "::error::scripts/patch_ksu_414.py missing"; exit 1; }
             python3 scripts/patch_ksu_414.py
