@@ -25,6 +25,11 @@ on:
         required: false
         type: string
         default: ''
+      susfs_repo:
+        description: 'susfs4ksu repo URL (use a 4.14 backport fork if upstream has no 4.14 branch)'
+        required: false
+        type: string
+        default: 'https://gitlab.com/simonpunk/susfs4ksu.git'
       susfs_branch:
         description: 'susfs4ksu branch'
         required: false
@@ -78,6 +83,7 @@ jobs:
       VARIANT: ${{ inputs.su_variant }}
       KSU_BRANCH: ${{ inputs.ksu_branch }}
       KSU_REF: ${{ inputs.ksu_ref }}
+      SUSFS_REPO: ${{ inputs.susfs_repo }}
       SUSFS_BRANCH: ${{ inputs.susfs_branch }}
       SUSFS_REF: ${{ inputs.susfs_ref }}
       RELEASE_TAG: ${{ inputs.release_tag }}
@@ -132,7 +138,9 @@ jobs:
 
           clone_pinned() { # url branch ref dest
             git clone --filter=blob:none -b "$2" "$1" "$4"
-            [ -n "$3" ] && git -C "$4" checkout "$3"
+            if [ -n "$3" ]; then
+              git -C "$4" checkout "$3"
+            fi
           }
 
           integrate_ksu() {
@@ -161,7 +169,14 @@ jobs:
           }
 
           integrate_susfs() {
-            clone_pinned https://gitlab.com/simonpunk/susfs4ksu.git "$SUSFS_BRANCH" "$SUSFS_REF" /tmp/susfs4ksu
+            echo "Branches available on $SUSFS_REPO:"
+            git ls-remote --heads "$SUSFS_REPO" | sed 's|.*refs/heads/||'
+            if ! git ls-remote --exit-code --heads "$SUSFS_REPO" "$SUSFS_BRANCH" >/dev/null; then
+              echo "::error::Branch '$SUSFS_BRANCH' not found in $SUSFS_REPO (see list above). Set susfs_repo/susfs_branch."
+              exit 1
+            fi
+            clone_pinned "$SUSFS_REPO" "$SUSFS_BRANCH" "$SUSFS_REF" /tmp/susfs4ksu
+            ls /tmp/susfs4ksu/kernel_patches
             SUSFS_VER=$(grep -oP '#define SUSFS_VERSION "\K[^"]+' /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h || echo unknown)
             SUSFS_INFO="$SUSFS_VER@$(git -C /tmp/susfs4ksu rev-parse --short HEAD)"
 
@@ -169,7 +184,9 @@ jobs:
             cp -vf /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
             # Strict apply: a half-applied SuSFS patch produces a kernel that boots but misbehaves.
-            if ! patch -p1 --no-backup-if-mismatch -F3 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch; then
+            PATCH_FILE=$(ls /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel*.patch | head -n1)
+            echo "Applying $PATCH_FILE"
+            if ! patch -p1 --no-backup-if-mismatch -F3 < "$PATCH_FILE"; then
               echo "::error::SuSFS kernel patch has rejects:"
               find . -name '*.rej' -print -exec cat {} \;
               exit 1
