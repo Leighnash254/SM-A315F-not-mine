@@ -186,8 +186,17 @@ jobs:
             # Strict apply: a half-applied SuSFS patch produces a kernel that boots but misbehaves.
             PATCH_FILE=$(ls /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel*.patch | head -n1)
             echo "Applying $PATCH_FILE"
-            if ! patch -p1 --no-backup-if-mismatch -F3 < "$PATCH_FILE"; then
-              echo "::error::SuSFS kernel patch has rejects:"
+            set +e
+            patch -p1 --no-backup-if-mismatch -F3 < "$PATCH_FILE"
+            set -e
+            REJECTS=$(find . -name '*.rej' | sort)
+            if [ "$REJECTS" = "./fs/namespace.c.rej" ]; then
+              # Known failure on Samsung trees: only hunk #1 (includes/declarations) fails.
+              echo "Applying known namespace.c hunk by anchor"
+              python3 scripts/fix_susfs_namespace_414.py
+              rm -f fs/namespace.c.rej
+            elif [ -n "$REJECTS" ]; then
+              echo "::error::Unexpected SuSFS patch rejects:"
               find . -name '*.rej' -print -exec cat {} \;
               exit 1
             fi
